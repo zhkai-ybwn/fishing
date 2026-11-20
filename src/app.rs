@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 use boss_sensor_platform::{self as platform, CameraInfo, WindowInfo, WindowTarget};
 use eframe::egui::{self, Align, ColorImage, Context, Layout, RichText, TextureHandle, Ui, Vec2};
 
-use crate::engine::{Captured, Engine, Job, Policy, Snapshot};
+use crate::engine::{Engine, Job, Policy, Snapshot};
 use crate::settings::{Person, Settings, Storage};
+use crate::{brand, ui as design};
 
 const STALE_FRAME: Duration = Duration::from_secs(2);
 
@@ -35,6 +36,7 @@ pub struct BossSensor {
     texture: Option<TextureHandle>,
     texture_sequence: u64,
     preview_position: Option<egui::Pos2>,
+    logo: TextureHandle,
 }
 
 impl BossSensor {
@@ -83,6 +85,7 @@ impl BossSensor {
             texture: None,
             texture_sequence: 0,
             preview_position: None,
+            logo: brand::texture(ctx),
         };
         app.refresh_cameras();
         if app.settings.switch_window {
@@ -188,7 +191,6 @@ impl BossSensor {
     }
 
     fn camera_section(&mut self, ui: &mut Ui) {
-        ui.heading("摄像头与预览");
         ui.horizontal(|ui| {
             let label = self.settings.camera_id.as_ref().map_or("默认摄像头", |id| {
                 self.cameras
@@ -196,10 +198,14 @@ impl BossSensor {
                     .find(|camera| camera.id == *id)
                     .map_or("所选摄像头不可用", |camera| camera.name.as_str())
             });
+            let picker_width = (ui.available_width() - 68.0).clamp(120.0, 380.0);
             egui::ComboBox::from_id_salt("camera-select")
-                .width(300.0)
+                .width(picker_width)
+                .truncate()
                 .selected_text(label)
                 .show_ui(ui, |ui| {
+                    ui.set_max_width(picker_width);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                     ui.selectable_value(&mut self.settings.camera_id, None, "默认摄像头");
                     for camera in &self.cameras {
                         ui.selectable_value(
@@ -208,7 +214,9 @@ impl BossSensor {
                             &camera.name,
                         );
                     }
-                });
+                })
+                .response
+                .on_hover_text(label);
             if ui.button("刷新").clicked() {
                 self.refresh_cameras();
             }
@@ -218,16 +226,17 @@ impl BossSensor {
         } else if self.cameras.is_empty() {
             ui.weak("未发现摄像头。连接摄像头后刷新列表。");
         }
-        ui.checkbox(&mut self.settings.preview, "显示置顶预览");
+        ui.separator();
+        design::switch(ui, &mut self.settings.preview, "置顶实时预览");
     }
 
     fn rule_section(&mut self, ui: &mut Ui) {
-        ui.heading("触发条件");
-        ui.checkbox(&mut self.settings.second_face, "画面中出现第二张脸");
+        design::switch(ui, &mut self.settings.second_face, "画面中出现第二张脸");
         if self.settings.second_face {
             ui.weak("保持你的脸在摄像头画面中。");
         }
-        ui.checkbox(&mut self.settings.recognize, "识别指定人员");
+        ui.separator();
+        design::switch(ui, &mut self.settings.recognize, "识别指定人员");
         if !self.settings.recognize {
             self.enrollment = None;
             return;
@@ -303,11 +312,9 @@ impl BossSensor {
     }
 
     fn action_section(&mut self, ui: &mut Ui) {
-        ui.heading("触发动作");
-        ui.checkbox(&mut self.settings.notify, "显示桌面提示");
-        if ui
-            .checkbox(&mut self.settings.switch_window, "切到目标应用")
-            .changed()
+        design::switch(ui, &mut self.settings.notify, "显示桌面提示");
+        ui.separator();
+        if design::switch(ui, &mut self.settings.switch_window, "切到目标应用").changed()
             && self.settings.switch_window
         {
             self.windows = platform::windows();
@@ -322,10 +329,14 @@ impl BossSensor {
                     .target
                     .as_ref()
                     .map_or_else(|| "选择目标应用".into(), target_label);
+                let picker_width = (ui.available_width() - 68.0).clamp(120.0, 380.0);
                 egui::ComboBox::from_id_salt("target-app")
-                    .width(320.0)
-                    .selected_text(label)
+                    .width(picker_width)
+                    .truncate()
+                    .selected_text(&label)
                     .show_ui(ui, |ui| {
+                        ui.set_max_width(picker_width);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                         ui.selectable_value(&mut self.settings.target, None, "清除目标");
                         if self.windows.is_empty() {
                             ui.weak("打开应用窗口后，刷新此列表。");
@@ -348,13 +359,18 @@ impl BossSensor {
                                 title: Some(window.title.clone()),
                                 path: window.path.clone(),
                             };
-                            ui.selectable_value(
-                                &mut self.settings.target,
-                                Some(target),
-                                format!("    {}", window.title),
-                            );
+                            ui.indent((&window.path, &window.title), |ui| {
+                                ui.selectable_value(
+                                    &mut self.settings.target,
+                                    Some(target),
+                                    &window.title,
+                                )
+                                .on_hover_text(&window.title);
+                            });
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(label);
                 if ui.button("刷新").clicked() {
                     self.windows = platform::windows();
                 }
@@ -363,12 +379,16 @@ impl BossSensor {
         });
     }
 
-    fn preview(&mut self, ctx: &Context, image: Option<&Arc<Captured>>) {
+    fn preview(&mut self, ctx: &Context, snapshot: &Snapshot) {
         if !self.settings.preview || (!self.running && self.enrollment.is_none()) {
             self.texture = None;
             return;
         }
-        if let Some(image) = image.filter(|image| image.at.elapsed() < STALE_FRAME) {
+        if let Some(image) = snapshot
+            .image
+            .as_ref()
+            .filter(|image| image.at.elapsed() < STALE_FRAME)
+        {
             if self.texture.is_none() || self.texture_sequence != image.sequence {
                 let frame = &image.frame;
                 let pixels =
@@ -390,7 +410,8 @@ impl BossSensor {
 
         let mut builder = egui::ViewportBuilder::default()
             .with_title("BossSensor 预览")
-            .with_inner_size([320.0, 204.0])
+            .with_icon(brand::window_icon())
+            .with_inner_size([320.0, 192.0])
             .with_min_inner_size([175.0, 120.0])
             .with_active(false)
             .with_taskbar(false)
@@ -408,7 +429,7 @@ impl BossSensor {
                 let rect = ctx.input(|input| input.viewport().outer_rect);
                 if class != egui::ViewportClass::Embedded {
                     egui::CentralPanel::default()
-                        .frame(egui::Frame::new().fill(egui::Color32::BLACK))
+                        .frame(egui::Frame::new().fill(design::PREVIEW_SURFACE))
                         .show(ctx, |ui| {
                             ui.centered_and_justified(|ui| {
                                 if let Some(texture) = &self.texture {
@@ -418,8 +439,12 @@ impl BossSensor {
                                     ui.image((texture.id(), original * scale));
                                 } else {
                                     ui.label(
-                                        RichText::new("等待摄像头画面")
-                                            .color(egui::Color32::LIGHT_GRAY),
+                                        RichText::new(if snapshot.camera_error.is_some() {
+                                            "摄像头暂不可用"
+                                        } else {
+                                            "正在连接摄像头…"
+                                        })
+                                        .color(design::PREVIEW_TEXT),
                                     );
                                 }
                             });
@@ -445,21 +470,34 @@ impl eframe::App for BossSensor {
         self.observe(&snapshot);
 
         egui::TopBottomPanel::top("app-header")
-            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(16))
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .fill(ctx.style().visuals.window_fill)
+                    .inner_margin(egui::Margin::symmetric(22, 16)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading(RichText::new("BossSensor").size(23.0));
+                    ui.image((self.logo.id(), Vec2::splat(42.0)));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("BossSensor").size(25.0).strong());
+                        ui.label(RichText::new("摄像头预览与来人提醒").small().weak());
+                    });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let label = if self.running { "暂停" } else { "启动" };
                         let button = if self.running {
                             egui::Button::new(label)
                         } else {
-                            egui::Button::new(label).fill(ui.visuals().selection.bg_fill)
+                            egui::Button::new(
+                                RichText::new(label)
+                                    .strong()
+                                    .color(ui.visuals().selection.stroke.color),
+                            )
+                            .fill(ui.visuals().selection.bg_fill)
                         };
                         if ui
                             .add_enabled(
                                 self.engine.is_some(),
-                                button.min_size(Vec2::new(72.0, 30.0)),
+                                button.min_size(Vec2::new(78.0, 34.0)),
                             )
                             .clicked()
                         {
@@ -493,30 +531,55 @@ impl eframe::App for BossSensor {
                 } else {
                     "预览中".into()
                 };
-                ui.weak(status);
-            });
-
-        egui::TopBottomPanel::bottom("app-status").show(ctx, |ui| {
-            if let Some(error) = &self.save_error {
-                ui.label(RichText::new(error).color(ui.visuals().warn_fg_color));
-            }
-            if let Some(event) = &self.event_label {
-                ui.label(event);
-            }
-        });
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(16))
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.camera_section(ui);
-                    section_break(ui);
-                    self.rule_section(ui);
-                    section_break(ui);
-                    self.action_section(ui);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let has_error = self.startup_error.is_some()
+                        || snapshot.camera_error.is_some()
+                        || snapshot.vision_error.is_some();
+                    let color = if has_error {
+                        ui.visuals().warn_fg_color
+                    } else if self.job.is_some() {
+                        ui.visuals().selection.bg_fill
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
+                    let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 3.0, color);
+                    ui.label(RichText::new(status).small().weak());
                 });
             });
-        self.preview(ctx, snapshot.image.as_ref());
+
+        if self.save_error.is_some() || self.event_label.is_some() {
+            egui::TopBottomPanel::bottom("app-status")
+                .frame(
+                    egui::Frame::side_top_panel(&ctx.style())
+                        .inner_margin(egui::Margin::symmetric(22, 10)),
+                )
+                .show(ctx, |ui| {
+                    if let Some(error) = &self.save_error {
+                        ui.label(RichText::new(error).color(ui.visuals().warn_fg_color));
+                    }
+                    if let Some(event) = &self.event_label {
+                        ui.label(RichText::new(format!("最近触发 · {event}")).small());
+                    }
+                });
+        }
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::central_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(22, 18)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    design::section(ui, "摄像头", |ui| self.camera_section(ui));
+                    ui.add_space(9.0);
+                    design::section(ui, "触发条件", |ui| self.rule_section(ui));
+                    ui.add_space(9.0);
+                    design::section(ui, "触发动作", |ui| self.action_section(ui));
+                });
+            });
+        self.preview(ctx, &snapshot);
         self.configure_engine();
 
         if initial != self.settings
@@ -535,10 +598,7 @@ impl eframe::App for BossSensor {
 }
 
 fn configure_ui(ctx: &Context) {
-    ctx.style_mut(|style| {
-        style.spacing.item_spacing = egui::vec2(8.0, 9.0);
-        style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    });
+    design::configure_theme(ctx);
     let mut fonts = egui::FontDefinitions::default();
     let name = "noto-sans-sc".to_owned();
     let chinese = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
@@ -547,12 +607,6 @@ fn configure_ui(ctx: &Context) {
         family.push(name.clone());
     }
     ctx.set_fonts(fonts);
-}
-
-fn section_break(ui: &mut Ui) {
-    ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(10.0);
 }
 
 fn executable_name(path: &str) -> &str {

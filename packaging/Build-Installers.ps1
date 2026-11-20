@@ -47,6 +47,7 @@ function Invoke-WixBuild([string[]]$Arguments) {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
+$iconPath = (Resolve-Path -LiteralPath (Join-Path $root 'assets/BossSensor.ico')).Path
 $runtime = & (Join-Path $PSScriptRoot 'Get-OnnxRuntime.ps1')
 $redist = Find-VcRedistDirectory
 $output = (New-Item -ItemType Directory -Force -Path $OutputDirectory).FullName
@@ -87,12 +88,13 @@ try {
 
     Invoke-WixBuild @('build', '-arch', 'x64', '-pdbtype', 'none',
         '-d', "Version=$Version", '-d', "PayloadDirectory=$payload", '-d', "IncludeNotices=$includeNotices",
+        '-d', "IconPath=$iconPath",
         '-out', $msi, (Join-Path $PSScriptRoot 'Package.wxs'))
     # ICE91 compares user directories with a machine-wide install. This package is per-user.
     Invoke-WixBuild @('msi', 'validate', '-sice', 'ICE91', $msi)
     Invoke-WixBuild @('build', '-arch', 'x64', '-pdbtype', 'none',
         '-ext', 'WixToolset.BootstrapperApplications.wixext',
-        '-d', "Version=$Version", '-d', "MsiPath=$msi",
+        '-d', "Version=$Version", '-d', "MsiPath=$msi", '-d', "IconPath=$iconPath",
         '-out', $exe, (Join-Path $PSScriptRoot 'Bundle.wxs'))
 
     $embedded = Join-Path $scratch 'embedded'

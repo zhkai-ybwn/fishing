@@ -34,4 +34,6 @@ cargo build --release --locked --bin BossSensor
 ./packaging/Build-Installers.ps1 -Version 0.1.0
 ```
 
-The output contains a per-user MSI, its self-contained EXE installer, and `SHA256SUMS.txt`. Check clean installation, startup, upgrade from the last published version with settings intact, and uninstall. Keep the package upgrade identity stable. Tag the verified commit `v<version>` to build and publish the GitHub Release. Workflow dispatch builds reviewable artifacts without creating a release.
+The output contains a per-user MSI, its self-contained EXE installer, and `SHA256SUMS.txt`. Verify the client locally before publishing. Check the real camera preview, rule and action combinations, settings in both system themes, and installation and removal. For upgrades, check that settings from the last published version remain intact. Keep the package upgrade identity stable.
+
+After local acceptance, tag the verified commit `v<version>`. Tag pushes build and smoke-test the installers and leave them as Actions artifacts. To publish, manually run the Windows workflow on that tag with `publish` enabled. The workflow validates the tag, runs the installer smoke tests and publishes both files with their checksums.

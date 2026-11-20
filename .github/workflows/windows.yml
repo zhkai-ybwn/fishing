@@ -6,6 +6,11 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish an existing version tag after local visual and hardware acceptance
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,6 +24,10 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 35
     steps:
+      - name: Require a version tag for publication
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref_type != 'tag'
+        run: throw 'Select an existing version tag when enabling publication.'
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -90,8 +99,8 @@ jobs:
           compression-level: 0
 
   release:
-    name: Publish tagged release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    name: Publish manually approved release
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10

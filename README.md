@@ -1,10 +1,12 @@
+<img src="assets/BossSensor.png" width="64" height="64" alt="BossSensor logo" />
+
 # BossSensor
 
 BossSensor 是一个本地运行的 Windows 摄像头工具。可以把实时画面放在置顶小窗里，也可以在识别到指定人员或第二张脸时提示、切换到选好的应用窗口。
 
 ## 安装和使用
 
-1. 从 [GitHub Releases](https://github.com/zhkai-ybwn/fishing/releases) 下载 Windows x64 的 `Setup.exe` 或 `.msi`，安装后打开 BossSensor。
+1. 安装已验证的 Windows x64 `Setup.exe` 或 `.msi`，然后打开 BossSensor。公开安装包会在本地验收后提供。 [GitHub Releases](https://github.com/zhkai-ybwn/fishing/releases)
 2. 选择摄像头。按需打开置顶预览、触发条件和触发动作，然后点击「启动」。只打开预览即可查看画面。
 3. 要识别指定人员，输入名称并点击「录入」。让同意录入的人单独正对摄像头，直到设置页显示录入成功。
 4. 要自动切屏，先打开工作应用，再从目标列表选应用或具体窗口。如果同一应用打开了多个窗口，选择具体窗口可消除歧义。

@@ -1,0 +1,16 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="BossSensor"
+          Manufacturer="BossSensor contributors"
+          Version="$(Version)"
+          UpgradeCode="{460EC1B8-E97B-4F5B-B232-7A4B6218D6BA}"
+          AboutUrl="https://github.com/zhkai-ybwn/fishing"
+          Compressed="yes" DisableModify="yes">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="" />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="$(MsiPath)" />
+    </Chain>
+  </Bundle>
+</Wix>

@@ -1,0 +1,23 @@
+[package]
+name = "boss-sensor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Local Windows camera preview and configurable presence alerts"
+license = "MIT"
+repository = "https://github.com/zhkai-ybwn/fishing"
+
+[[bin]]
+name = "BossSensor"
+path = "src/main.rs"
+
+[workspace]
+members = ["crates/platform", "crates/vision"]
+resolver = "3"
+
+[dependencies]
+boss-sensor-platform = { path = "crates/platform" }
+boss-sensor-vision = { path = "crates/vision" }
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

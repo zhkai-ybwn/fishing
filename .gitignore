@@ -1,0 +1,9 @@
+/target/
+/dist/
+**/bin/
+**/obj/
+*.user
+*.pdb
+*.wixpdb
+/assets/fonts/NotoSansSC.ttf
+/crates/vision/models/*.onnx

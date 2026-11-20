@@ -1,16 +1,16 @@
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use boss_sensor_platform::{
-    self as platform, CameraInfo, WindowActivation, WindowInfo, WindowTarget,
+    self as platform, CameraInfo, Tray, TrayAction, WindowActivation, WindowInfo, WindowTarget,
 };
 use eframe::egui::{self, Align, ColorImage, Context, Layout, RichText, TextureHandle, Ui, Vec2};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-use crate::engine::{Engine, Job, Policy, Snapshot};
-use crate::settings::{DEFAULT_NOTIFICATION_TEXT, Person, Settings, Storage};
+use crate::engine::{Engine, Job, Policy, Reminder, Snapshot};
+use crate::settings::{DEFAULT_NOTIFICATION_TEXT, Person, Settings, Storage, render_reminder};
 use crate::{brand, ui as design};
 
 const STALE_FRAME: Duration = Duration::from_secs(2);
@@ -33,7 +33,10 @@ pub struct Fishing {
     engine: Option<Engine>,
     startup_error: Option<String>,
     save_error: Option<String>,
-    running: bool,
+    running_since: Option<Instant>,
+    tray: Option<Tray>,
+    tray_error: Option<String>,
+    in_tray: bool,
     job: Option<Job>,
     cameras: Vec<CameraInfo>,
     camera_list_error: Option<String>,
@@ -41,17 +44,21 @@ pub struct Fishing {
     last_event: Option<Instant>,
     event_label: Option<String>,
     person_name: String,
+    minimum_faces_input: String,
     enrollment: Option<Enrollment>,
     enrollment_label: Option<String>,
     texture: Option<TextureHandle>,
     texture_sequence: u64,
     preview_position: Option<egui::Pos2>,
+    preview_open: bool,
     logo: TextureHandle,
 }
 
 impl Fishing {
-    pub fn new(ctx: &Context) -> Self {
-        configure_ui(ctx);
+    pub fn new(context: &eframe::CreationContext<'_>) -> Self {
+        let ctx = &context.egui_ctx;
+        design::configure_fonts(ctx);
+        design::configure_theme(ctx);
         let (settings, storage, save_error, mut startup_error) = match Storage::open() {
             Ok(storage) => match storage.load() {
                 Ok(settings) => (settings, Some(storage), None, None),
@@ -75,14 +82,26 @@ impl Fishing {
         } else {
             None
         };
+        let (tray, tray_error) = if engine.is_some() {
+            match create_tray(context) {
+                Ok(tray) => (Some(tray), None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
         let mut app = Self {
             save_enabled: storage.is_some() && save_error.is_none(),
+            minimum_faces_input: settings.minimum_faces.to_string(),
             settings,
             storage,
             engine,
             startup_error,
             save_error,
-            running: false,
+            running_since: None,
+            tray,
+            tray_error,
+            in_tray: false,
             job: None,
             cameras: Vec::new(),
             camera_list_error: None,
@@ -95,6 +114,7 @@ impl Fishing {
             texture: None,
             texture_sequence: 0,
             preview_position: None,
+            preview_open: false,
             logo: brand::texture(ctx),
         };
         app.refresh_cameras();
@@ -117,7 +137,8 @@ impl Fishing {
     fn configure_engine(&mut self) {
         let recording = matches!(self.enrollment, Some(Enrollment::Camera { .. }));
         let importing = matches!(self.enrollment, Some(Enrollment::Photo { .. }));
-        let policy = if self.running && self.enrollment.is_none() {
+        let policy = if let Some(started) = self.running_since.filter(|_| self.enrollment.is_none())
+        {
             Policy {
                 minimum_faces: self
                     .settings
@@ -133,7 +154,13 @@ impl Fishing {
                 } else {
                     Vec::new()
                 },
-                notification_text: self.settings.notification_message().map(str::to_owned),
+                reminder: self
+                    .settings
+                    .notification_message()
+                    .map(|message| Reminder {
+                        template: message.into(),
+                        started,
+                    }),
                 target: self
                     .settings
                     .target
@@ -145,7 +172,8 @@ impl Fishing {
         };
         let identify = recording || !policy.templates.is_empty();
         let analyze = identify || policy.minimum_faces.is_some();
-        let preview = self.settings.preview && self.running && !importing;
+        let preview =
+            self.settings.preview && self.running_since.is_some() && !importing && !self.in_tray;
         let job = (preview || analyze).then(|| Job {
             camera: self.settings.camera_id.clone().unwrap_or_default(),
             analyze,
@@ -158,6 +186,61 @@ impl Fishing {
             }
             self.job = job;
         }
+    }
+
+    fn toggle_running(&mut self) {
+        self.running_since = if self.running_since.is_some() {
+            self.enrollment = None;
+            None
+        } else {
+            Some(Instant::now())
+        };
+        if let Some(tray) = &self.tray {
+            tray.set_running(self.running_since.is_some());
+        }
+    }
+
+    fn minimize_to_tray(&mut self, ctx: &Context) {
+        if let Some(tray) = &self.tray {
+            match tray.set_taskbar_visible(false) {
+                Ok(()) => {
+                    self.in_tray = true;
+                    self.tray_error = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+                Err(error) => self.tray_error = Some(error),
+            }
+        }
+    }
+
+    fn restore_from_tray(&mut self) {
+        if self.in_tray
+            && let Some(tray) = &self.tray
+        {
+            self.tray_error = tray.set_taskbar_visible(true).err();
+        }
+        self.in_tray = false;
+    }
+
+    fn handle_tray_actions(&mut self, ctx: &Context) -> bool {
+        while let Some(action) = self.tray.as_ref().and_then(Tray::next_action) {
+            match action {
+                TrayAction::Open => self.restore_from_tray(),
+                TrayAction::Toggle => self.toggle_running(),
+                TrayAction::Quit => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return false;
+                }
+            }
+        }
+        if self.in_tray
+            && ctx.input(|input| {
+                input.viewport().minimized == Some(false) && input.viewport().focused == Some(true)
+            })
+        {
+            self.restore_from_tray();
+        }
+        true
     }
 
     fn observe(&mut self, snapshot: &Snapshot) {
@@ -312,17 +395,45 @@ impl Fishing {
         design::switch(ui, &mut self.settings.face_count_enabled, "按人脸数量触发");
         if self.settings.face_count_enabled {
             ui.indent("minimum-faces", |ui| {
-                ui.horizontal(|ui| {
-                    let label = ui.label("检测到至少");
-                    ui.add(
-                        egui::DragValue::new(&mut self.settings.minimum_faces)
-                            .range(1..=u32::MAX)
-                            .update_while_editing(false),
-                    )
-                    .labelled_by(label.id);
-                    ui.label("张脸时触发");
-                });
-                ui.weak("按摄像头画面中的总人脸数计算。");
+                let valid = ui
+                    .horizontal(|ui| {
+                        let label = ui.label("检测到至少");
+                        let input = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.minimum_faces_input)
+                                    .desired_width(68.0)
+                                    .horizontal_align(Align::Center)
+                                    .char_limit(10),
+                            )
+                            .labelled_by(label.id);
+                        ui.label("张脸时触发");
+                        let value = self
+                            .minimum_faces_input
+                            .trim()
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|value| *value > 0);
+                        if input.lost_focus()
+                            && let Some(value) = value
+                        {
+                            self.settings.minimum_faces = value;
+                            self.minimum_faces_input = value.to_string();
+                        }
+                        value.is_some()
+                            || (input.has_focus() && self.minimum_faces_input.is_empty())
+                    })
+                    .inner;
+                if valid {
+                    ui.weak("按摄像头画面中的总人脸数计算。");
+                } else {
+                    ui.label(
+                        RichText::new(format!(
+                            "请输入正整数。正在使用阈值 {}。",
+                            self.settings.minimum_faces
+                        ))
+                        .color(ui.visuals().warn_fg_color),
+                    );
+                }
             });
         }
         ui.separator();
@@ -402,13 +513,31 @@ impl Fishing {
         if self.settings.notify {
             ui.indent("notification-text", |ui| {
                 let label = ui.label("提示文字");
+                let width = ui.available_width();
                 ui.add(
                     egui::TextEdit::singleline(&mut self.settings.notification_text)
                         .hint_text(DEFAULT_NOTIFICATION_TEXT)
                         .char_limit(80)
-                        .desired_width(ui.available_width().min(300.0)),
+                        .desired_width(width.min(440.0)),
                 )
                 .labelled_by(label.id);
+                ui.weak("{时长} 会替换为自本次启动检测以来的时间。");
+                ui.horizontal(|ui| {
+                    if ui.button("恢复默认").clicked() {
+                        self.settings.notification_text = DEFAULT_NOTIFICATION_TEXT.into();
+                    }
+                    if ui.button("预览提醒").clicked()
+                        && let Some(template) = self.settings.notification_message()
+                    {
+                        let elapsed = self
+                            .running_since
+                            .map_or(Duration::ZERO, |started| started.elapsed());
+                        let message = render_reminder(template, elapsed);
+                        if let Err(error) = platform::notify(&message) {
+                            self.event_label = Some(error);
+                        }
+                    }
+                });
             });
         }
         ui.separator();
@@ -479,10 +608,12 @@ impl Fishing {
 
     fn preview(&mut self, ctx: &Context, snapshot: &Snapshot) {
         if !self.settings.preview
-            || (!self.running && self.enrollment.is_none())
+            || (self.running_since.is_none() && self.enrollment.is_none())
             || matches!(self.enrollment, Some(Enrollment::Photo { .. }))
+            || self.in_tray
         {
             self.texture = None;
+            self.preview_open = false;
             return;
         }
         if let Some(image) = snapshot
@@ -519,9 +650,12 @@ impl Fishing {
             .with_always_on_top()
             .with_maximize_button(false)
             .with_minimize_button(false);
-        if let Some(position) = self.preview_position {
+        if !self.preview_open
+            && let Some(position) = self.preview_position
+        {
             builder = builder.with_position(position);
         }
+        self.preview_open = true;
         let (closed, rect) = ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("camera-preview"),
             builder,
@@ -554,38 +688,35 @@ impl Fishing {
                 (closed, rect)
             },
         );
+        if let Some(rect) = rect {
+            self.preview_position = Some(rect.min);
+        }
         if closed {
-            self.preview_position = rect.map(|rect| rect.min);
+            self.preview_open = false;
             self.settings.preview = false;
         }
     }
 }
 
-impl eframe::App for Fishing {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        let initial = self.settings.clone();
-        let snapshot = self
-            .engine
-            .as_ref()
-            .map_or_else(Snapshot::default, Engine::snapshot);
-        self.observe(&snapshot);
-
+impl Fishing {
+    fn draw_settings(&mut self, ctx: &Context, snapshot: &Snapshot) {
         egui::TopBottomPanel::top("app-header")
             .frame(
                 egui::Frame::side_top_panel(&ctx.style())
                     .fill(ctx.style().visuals.window_fill)
-                    .inner_margin(egui::Margin::symmetric(22, 16)),
+                    .inner_margin(egui::Margin::symmetric(20, 12)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.image((self.logo.id(), Vec2::splat(42.0)));
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(brand::NAME).size(25.0).strong());
+                        ui.label(RichText::new(brand::NAME).font(design::bold_font(25.0)));
                         ui.label(RichText::new("桌面摸鱼助手").small().weak());
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let label = if self.running { "暂停" } else { "启动" };
-                        let button = if self.running {
+                        let running = self.running_since.is_some();
+                        let label = if running { "暂停" } else { "启动" };
+                        let button = if running {
                             egui::Button::new(label)
                         } else {
                             egui::Button::new(
@@ -602,10 +733,14 @@ impl eframe::App for Fishing {
                             )
                             .clicked()
                         {
-                            self.running = !self.running;
-                            if !self.running {
-                                self.enrollment = None;
-                            }
+                            self.toggle_running();
+                        }
+                        if ui
+                            .add_enabled(self.tray.is_some(), egui::Button::new("收起到托盘"))
+                            .on_hover_text("收起窗口，保持当前的检测状态")
+                            .clicked()
+                        {
+                            self.minimize_to_tray(ctx);
                         }
                     });
                 });
@@ -619,7 +754,7 @@ impl eframe::App for Fishing {
                     "正在录入照片…".into()
                 } else if self.enrollment.is_some() {
                     "录入中 · 等待一张人脸".into()
-                } else if !self.running {
+                } else if self.running_since.is_none() {
                     "已暂停".into()
                 } else if self.job.is_none() {
                     "等待开启预览或触发条件".into()
@@ -652,7 +787,7 @@ impl eframe::App for Fishing {
                 });
             });
 
-        if self.save_error.is_some() || self.event_label.is_some() {
+        if self.save_error.is_some() || self.event_label.is_some() || self.tray_error.is_some() {
             egui::TopBottomPanel::bottom("app-status")
                 .frame(
                     egui::Frame::side_top_panel(&ctx.style())
@@ -660,6 +795,9 @@ impl eframe::App for Fishing {
                 )
                 .show(ctx, |ui| {
                     if let Some(error) = &self.save_error {
+                        ui.label(RichText::new(error).color(ui.visuals().warn_fg_color));
+                    }
+                    if let Some(error) = &self.tray_error {
                         ui.label(RichText::new(error).color(ui.visuals().warn_fg_color));
                     }
                     if let Some(event) = &self.event_label {
@@ -682,6 +820,23 @@ impl eframe::App for Fishing {
                     design::section(ui, "触发动作", |ui| self.action_section(ui));
                 });
             });
+    }
+}
+
+impl eframe::App for Fishing {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        if !self.handle_tray_actions(ctx) {
+            return;
+        }
+        let initial = self.settings.clone();
+        let snapshot = self
+            .engine
+            .as_ref()
+            .map_or_else(Snapshot::default, Engine::snapshot);
+        self.observe(&snapshot);
+        if !self.in_tray {
+            self.draw_settings(ctx, &snapshot);
+        }
         self.preview(ctx, &snapshot);
         self.configure_engine();
 
@@ -694,22 +849,23 @@ impl eframe::App for Fishing {
                 .err()
                 .map(|error| format!("设置保存失败 · {error}"));
         }
-        if self.job.is_some() || self.enrollment.is_some() {
+        if (!self.in_tray && self.job.is_some()) || self.enrollment.is_some() {
             ctx.request_repaint_after(Duration::from_millis(40));
         }
     }
 }
 
-fn configure_ui(ctx: &Context) {
-    design::configure_theme(ctx);
-    let mut fonts = egui::FontDefinitions::default();
-    let name = "noto-sans-sc".to_owned();
-    let chinese = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
-    fonts.font_data.insert(name.clone(), Arc::new(chinese));
-    for family in fonts.families.values_mut() {
-        family.push(name.clone());
-    }
-    ctx.set_fonts(fonts);
+fn create_tray(context: &eframe::CreationContext<'_>) -> Result<Tray, String> {
+    let handle = context
+        .window_handle()
+        .map_err(|error| format!("系统托盘不可用，无法取得主窗口。{error}"))?;
+    let RawWindowHandle::Win32(window) = handle.as_raw() else {
+        return Err("系统托盘不可用，找不到 Windows 主窗口。".into());
+    };
+    let ctx = context.egui_ctx.clone();
+    Tray::new(window.hwnd.get(), move || {
+        ctx.request_repaint_of(egui::ViewportId::ROOT)
+    })
 }
 
 fn executable_name(path: &str) -> &str {

@@ -586,6 +586,7 @@ dependencies = [
  "boss-sensor-platform",
  "boss-sensor-vision",
  "eframe",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "winresource",

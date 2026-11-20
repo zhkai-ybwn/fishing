@@ -30,7 +30,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         brand::NAME,
         options,
-        Box::new(|context| Ok(Box::new(app::Fishing::new(&context.egui_ctx)))),
+        Box::new(|context| Ok(Box::new(app::Fishing::new(context)))),
     )
 }
 

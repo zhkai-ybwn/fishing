@@ -12,8 +12,8 @@ if (-not (Test-Path -LiteralPath $root -PathType Container)) {
 
 $modelCommit = '48b10fa505aeb51fbd127fc60a5c660040e823b7'
 $modelBase = "https://media.githubusercontent.com/media/opencv/opencv_zoo/$modelCommit/models"
-$fontCommit = 'a85815a42757630ce188fdad368c2dfc444d4773'
-$fontBase = "https://raw.githubusercontent.com/google/fonts/$fontCommit/ofl/notosanssc"
+$fontCommit = '523d033d6cb47f4a80c58a35753646f5c3608a78'
+$fontBase = "https://raw.githubusercontent.com/notofonts/noto-cjk/$fontCommit/Sans/SubsetOTF/SC"
 $assets = @(
     @{
         Path = 'crates/vision/models/face_detection_yunet_2026may.onnx'
@@ -26,9 +26,14 @@ $assets = @(
         Sha256 = '0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79'
     },
     @{
-        Path = 'assets/fonts/NotoSansSC.ttf'
-        Url = "$fontBase/NotoSansSC%5Bwght%5D.ttf"
-        Sha256 = 'a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da'
+        Path = 'assets/fonts/NotoSansSC-Regular.otf'
+        Url = "$fontBase/NotoSansSC-Regular.otf"
+        Sha256 = 'faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9'
+    },
+    @{
+        Path = 'assets/fonts/NotoSansSC-Bold.otf'
+        Url = "$fontBase/NotoSansSC-Bold.otf"
+        Sha256 = 'c6cb5a93abaa9edc8ee7463b7ebb7f42d618d40e6ed2f7a5371c97b0b64767c0'
     }
 )
 

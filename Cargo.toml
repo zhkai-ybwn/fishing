@@ -19,6 +19,7 @@ resolver = "3"
 boss-sensor-platform = { path = "crates/platform" }
 boss-sensor-vision = { path = "crates/vision" }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow"] }
+raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -11,8 +11,10 @@ serde = { version = "1", features = ["derive"] }
 [target.'cfg(windows)'.dependencies]
 nokhwa = { version = "=0.10.11", features = ["input-msmf"] }
 windows = { version = "0.62", features = [
+    "UI_ViewManagement",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    "Win32_System_WinRT",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell_Common",
 ] }
@@ -24,5 +26,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

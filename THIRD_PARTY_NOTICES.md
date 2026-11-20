@@ -12,6 +12,6 @@ fishing source code is MIT-licensed. Bundled model weights and runtime libraries
 
 The model sources and hashes are recorded in [the model manifest](crates/vision/models/README.md). The source dependencies are tracked in `Cargo.lock`.
 
-The bundled font comes from [Google Fonts at commit `a85815a4`](https://github.com/google/fonts/tree/a85815a42757630ce188fdad368c2dfc444d4773/ofl/notosanssc). Its SHA-256 is `a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da`.
+The bundled Noto Sans SC Regular and Bold files come from [Noto CJK Sans 2.004 at commit `523d033`](https://github.com/notofonts/noto-cjk/tree/523d033d6cb47f4a80c58a35753646f5c3608a78/Sans/SubsetOTF/SC). Both SHA-256 values are pinned in [the asset preparation script](packaging/Prepare-Assets.ps1).
 
 The offline inference self-test uses a crop of the U.S. Navy portrait of Grace M. Hopper by James S. Davis, a U.S. public-domain photograph. [Fixture source](crates/vision/tests/data/README.md)

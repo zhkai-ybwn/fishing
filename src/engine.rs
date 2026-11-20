@@ -6,6 +6,7 @@ use boss_sensor_platform::{self as platform, Camera, Frame, WindowActivation, Wi
 use boss_sensor_vision::{Observation, Vision};
 
 use crate::rules::{self, Matches, Rules};
+use crate::settings::render_reminder;
 
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(33);
 const ANALYSIS_INTERVAL: Duration = Duration::from_millis(150);
@@ -33,8 +34,14 @@ impl Job {
 pub struct Policy {
     pub minimum_faces: Option<u32>,
     pub templates: Vec<Vec<f32>>,
-    pub notification_text: Option<String>,
+    pub reminder: Option<Reminder>,
     pub target: Option<WindowTarget>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Reminder {
+    pub template: String,
+    pub started: Instant,
 }
 
 pub struct Captured {
@@ -277,10 +284,16 @@ fn vision_loop(shared: &Shared) {
                                 .map(platform::activate);
                             let notification = job
                                 .policy
-                                .notification_text
-                                .as_deref()
+                                .reminder
+                                .as_ref()
                                 .filter(|_| job_is_current(shared, generation))
-                                .map(platform::notify);
+                                .map(|reminder| {
+                                    let message = render_reminder(
+                                        &reminder.template,
+                                        reminder.started.elapsed(),
+                                    );
+                                    platform::notify(&message)
+                                });
                             let mut state = shared.state.lock().unwrap();
                             if state.generation == generation {
                                 state.snapshot.event = Some(Arc::new(Event {
@@ -334,7 +347,10 @@ mod tests {
         engine.configure(Some(job.clone()));
         let first_generation = engine.0.state.lock().unwrap().rule_generation;
 
-        job.policy.notification_text = Some("喝水时间".into());
+        job.policy.reminder = Some(Reminder {
+            template: "喝水时间".into(),
+            started: Instant::now(),
+        });
         engine.configure(Some(job.clone()));
         assert_eq!(
             engine.0.state.lock().unwrap().rule_generation,

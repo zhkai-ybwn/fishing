@@ -6,4 +6,5 @@
 *.pdb
 *.wixpdb
 /assets/fonts/NotoSansSC.ttf
+/assets/fonts/NotoSansSC-*.otf
 /crates/vision/models/*.onnx

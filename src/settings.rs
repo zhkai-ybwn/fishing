@@ -1,13 +1,14 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use boss_sensor_platform::WindowTarget;
 use boss_sensor_vision::{EMBEDDING_LEN, EMBEDDING_MODEL};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA_VERSION: u32 = 1;
-pub const DEFAULT_NOTIFICATION_TEXT: &str = "留意一下";
+pub const DEFAULT_NOTIFICATION_TEXT: &str = "已专注{时长}，起身走走，休息一下吧。";
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -55,6 +56,20 @@ impl Settings {
             }
         })
     }
+}
+
+pub fn render_reminder(template: &str, elapsed: Duration) -> String {
+    if !template.contains("{时长}") {
+        return template.to_owned();
+    }
+    let minutes = elapsed.as_secs() / 60;
+    let duration = match (minutes / 60, minutes % 60) {
+        (0, 0) => "不到 1 分钟".into(),
+        (0, minutes) => format!("{minutes} 分钟"),
+        (hours, 0) => format!("{hours} 小时"),
+        (hours, minutes) => format!("{hours} 小时 {minutes} 分钟"),
+    };
+    template.replace("{时长}", &duration)
 }
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
@@ -164,5 +179,25 @@ mod tests {
         );
         settings.notify = false;
         assert_eq!(settings.notification_message(), None);
+    }
+
+    #[test]
+    fn reminder_substitutes_the_elapsed_session_time() {
+        assert_eq!(
+            render_reminder("休息{时长}后继续", Duration::ZERO),
+            "休息不到 1 分钟后继续"
+        );
+        assert_eq!(
+            render_reminder("已专注{时长}", Duration::from_secs(25 * 60)),
+            "已专注25 分钟"
+        );
+        assert_eq!(
+            render_reminder("已专注{时长}", Duration::from_secs(65 * 60)),
+            "已专注1 小时 5 分钟"
+        );
+        assert_eq!(
+            render_reminder("喝水时间", Duration::from_secs(15 * 60)),
+            "喝水时间"
+        );
     }
 }

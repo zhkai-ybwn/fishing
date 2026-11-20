@@ -24,8 +24,10 @@ cargo test --locked --workspace
 For changes affecting the desktop experience, use the local application for manual verification.
 
 - Try preview-only and person enrollment. Cover a disconnected or unavailable camera and the transition back to a working device. Test the office camera angle, distance, and lighting separately from the model fixtures.
-- Check the default threshold of two visible faces, then change it to three. Verify the rule starts at the chosen count and includes the camera operator whenever they appear in frame.
-- Minimize the settings window and verify the default popup text. Enter custom text and verify the next popup, then clear the field and check that the default is used.
+- Check the default threshold of two visible faces, then type three into the field. Check the I-beam cursor and commit the value with Enter and by clicking away. Verify the rule starts at the chosen count and includes the camera operator whenever they appear in frame.
+- Check the Chinese labels and headings in light and dark themes. Confirm buttons and switches have immediate visible feedback on pointer-down.
+- Use 「预览提醒」 with fixed custom text and with a `{时长}` template. Confirm the default can be restored, previously saved plain text is displayed literally, and elapsed time restarts when detection is started from the main window or tray.
+- Use 「收起到托盘」 while detection is running. Check that the taskbar button and preview disappear and that configured actions keep working. Open settings from the tray, try starting and pausing detection there, and exit via the tray menu.
 - Check a foreground switch with the target application available. When Windows restricts activation, verify that the status distinguishes a target brought forward visually from a target with keyboard focus. When visual raising succeeds, confirm that the original application retains keyboard input. When both attempts fail, check that the status reports the failure.
 
 ## Building the installers

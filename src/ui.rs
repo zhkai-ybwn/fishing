@@ -1,6 +1,7 @@
 use eframe::egui::{
-    self, Align2, Color32, Context, FontId, Frame, Margin, Rect, Response, Sense, Stroke,
-    StrokeKind, TextStyle, Theme, Ui, WidgetInfo, WidgetType, vec2,
+    Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Frame, Margin, Rect,
+    Response, RichText, Sense, Stroke, StrokeKind, TextStyle, Theme, Ui, WidgetInfo, WidgetType,
+    vec2,
 };
 
 struct Palette {
@@ -8,6 +9,7 @@ struct Palette {
     surface: Color32,
     control: Color32,
     hover: Color32,
+    pressed: Color32,
     outline: Color32,
     text: Color32,
     muted: Color32,
@@ -19,10 +21,11 @@ const LIGHT: Palette = Palette {
     canvas: Color32::from_rgb(243, 245, 248),
     surface: Color32::from_rgb(253, 254, 255),
     control: Color32::from_rgb(234, 239, 244),
-    hover: Color32::from_rgb(224, 234, 241),
-    outline: Color32::from_rgb(216, 225, 234),
-    text: Color32::from_rgb(25, 43, 58),
-    muted: Color32::from_rgb(76, 96, 115),
+    hover: Color32::from_rgb(222, 233, 241),
+    pressed: Color32::from_rgb(200, 221, 233),
+    outline: Color32::from_rgb(204, 216, 226),
+    text: Color32::from_rgb(19, 35, 49),
+    muted: Color32::from_rgb(65, 82, 99),
     accent: Color32::from_rgb(25, 92, 110),
     on_accent: Color32::from_rgb(247, 252, 253),
 };
@@ -32,9 +35,10 @@ const DARK: Palette = Palette {
     surface: Color32::from_rgb(25, 34, 46),
     control: Color32::from_rgb(38, 53, 68),
     hover: Color32::from_rgb(48, 67, 84),
-    outline: Color32::from_rgb(58, 74, 91),
-    text: Color32::from_rgb(230, 239, 246),
-    muted: Color32::from_rgb(162, 183, 202),
+    pressed: Color32::from_rgb(63, 87, 103),
+    outline: Color32::from_rgb(72, 91, 111),
+    text: Color32::from_rgb(234, 242, 248),
+    muted: Color32::from_rgb(176, 195, 212),
     accent: Color32::from_rgb(115, 210, 205),
     on_accent: Color32::from_rgb(13, 42, 48),
 };
@@ -42,21 +46,52 @@ const DARK: Palette = Palette {
 pub const PREVIEW_SURFACE: Color32 = Color32::from_rgb(12, 18, 26);
 pub const PREVIEW_TEXT: Color32 = Color32::from_rgb(180, 198, 213);
 
+const REGULAR_FONT: &str = "fishing-text";
+const BOLD_FONT: &str = "fishing-text-bold";
+
+pub fn configure_fonts(ctx: &Context) {
+    let mut fonts = FontDefinitions::default();
+    let regular = FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC-Regular.otf"));
+    let bold = FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC-Bold.otf"));
+    fonts.font_data.insert(REGULAR_FONT.into(), regular.into());
+    fonts.font_data.insert(BOLD_FONT.into(), bold.into());
+    let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
+    proportional.insert(0, REGULAR_FONT.into());
+    let mut emphasis = proportional.clone();
+    emphasis.insert(0, BOLD_FONT.into());
+    fonts
+        .families
+        .insert(FontFamily::Name(BOLD_FONT.into()), emphasis);
+    fonts
+        .families
+        .entry(FontFamily::Monospace)
+        .or_default()
+        .push(REGULAR_FONT.into());
+    ctx.set_fonts(fonts);
+}
+
+pub fn bold_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(BOLD_FONT.into()))
+}
+
 pub fn configure_theme(ctx: &Context) {
     for (theme, colors) in [(Theme::Light, LIGHT), (Theme::Dark, DARK)] {
         ctx.style_mut_of(theme, |style| {
-            style.spacing.item_spacing = vec2(8.0, 8.0);
-            style.spacing.button_padding = vec2(11.0, 6.0);
-            style.spacing.interact_size.y = 30.0;
+            style.spacing.item_spacing = vec2(8.0, 7.0);
+            style.spacing.button_padding = vec2(12.0, 6.0);
+            style.spacing.interact_size.y = 32.0;
             style
                 .text_styles
-                .insert(TextStyle::Body, FontId::proportional(14.0));
+                .insert(TextStyle::Heading, bold_font(18.0));
             style
                 .text_styles
-                .insert(TextStyle::Button, FontId::proportional(13.0));
+                .insert(TextStyle::Body, FontId::proportional(15.0));
             style
                 .text_styles
-                .insert(TextStyle::Small, FontId::proportional(12.0));
+                .insert(TextStyle::Button, FontId::proportional(14.0));
+            style
+                .text_styles
+                .insert(TextStyle::Small, FontId::proportional(13.0));
 
             let visuals = &mut style.visuals;
             visuals.panel_fill = colors.canvas;
@@ -73,7 +108,7 @@ pub fn configure_theme(ctx: &Context) {
             for (widget, fill) in [
                 (&mut widgets.inactive, colors.control),
                 (&mut widgets.hovered, colors.hover),
-                (&mut widgets.active, colors.hover),
+                (&mut widgets.active, colors.pressed),
                 (&mut widgets.open, colors.hover),
             ] {
                 widget.weak_bg_fill = fill;
@@ -89,12 +124,12 @@ pub fn configure_theme(ctx: &Context) {
 }
 
 pub fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
-    ui.label(egui::RichText::new(title).size(15.0).strong());
+    ui.label(RichText::new(title).font(bold_font(16.0)));
     Frame::new()
         .fill(ui.visuals().window_fill)
         .stroke(ui.visuals().window_stroke)
         .corner_radius(10)
-        .inner_margin(Margin::symmetric(14, 10))
+        .inner_margin(Margin::symmetric(14, 11))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             content(ui);
@@ -103,7 +138,7 @@ pub fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
 
 pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
     let (rect, mut response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+        ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
     if response.clicked() {
         *value = !*value;
         response.mark_changed();
@@ -113,7 +148,10 @@ pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
 
     let visuals = ui.visuals();
     let painter = ui.painter();
-    if response.hovered() {
+    let pressed = response.is_pointer_button_down_on();
+    if pressed {
+        painter.rect_filled(rect, 7.0, visuals.widgets.active.weak_bg_fill);
+    } else if response.hovered() {
         painter.rect_filled(rect, 7.0, visuals.widgets.hovered.weak_bg_fill);
     }
     if response.has_focus() {
@@ -125,7 +163,7 @@ pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
         );
     }
     painter.text(
-        rect.left_center() + vec2(6.0, 0.0),
+        rect.left_center() + vec2(8.0, 0.0),
         Align2::LEFT_CENTER,
         label,
         TextStyle::Body.resolve(ui.style()),
@@ -151,6 +189,7 @@ pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
     } else {
         visuals.weak_text_color()
     };
-    painter.circle_filled(track.center() + vec2(offset, 0.0), 6.5, knob);
+    let knob_radius = if pressed { 6.0 } else { 6.5 };
+    painter.circle_filled(track.center() + vec2(offset, 0.0), knob_radius, knob);
     response
 }

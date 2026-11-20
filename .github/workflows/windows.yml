@@ -44,19 +44,19 @@ jobs:
       - name: Prepare pinned model and font assets
         run: ./packaging/Prepare-Assets.ps1
 
-      - name: Check lint
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
       - name: Prepare inference runtime
         run: |
           $runtime = & ./packaging/Get-OnnxRuntime.ps1
           "ORT_DYLIB_PATH=$(Join-Path $runtime 'onnxruntime.dll')" >> $env:GITHUB_ENV
 
+      - name: Check lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Test
         run: cargo test --workspace --locked
 
       - name: Build release application
-        run: cargo build --release --package boss-sensor --locked
+        run: cargo build --release --package fishing --locked
 
       - name: Resolve installer version
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
@@ -64,8 +64,8 @@ jobs:
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $application = ($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'boss-sensor'
-          if (!$application) { throw 'Could not resolve the BossSensor package version.' }
+          $application = ($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'fishing'
+          if (!$application) { throw 'Could not resolve the fishing package version.' }
           $version = $application.version
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
             throw "Release tag must match the package version v$version."
@@ -75,25 +75,25 @@ jobs:
       - name: Build MSI and EXE
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
-          BOSS_SENSOR_VERSION: ${{ steps.version.outputs.value }}
+          FISHING_VERSION: ${{ steps.version.outputs.value }}
         run: |
           dotnet tool install wix --version 6.0.2 --tool-path ./target/wix-tools
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $wix = (Resolve-Path -LiteralPath ./target/wix-tools/wix.exe).Path
           & $wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./packaging/Build-Installers.ps1 -Version $env:BOSS_SENSOR_VERSION -Wix $wix -OutputDirectory ./target/distribution
+          ./packaging/Build-Installers.ps1 -Version $env:FISHING_VERSION -Wix $wix -OutputDirectory ./target/distribution
 
       - name: Smoke-test both installers
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
-          BOSS_SENSOR_VERSION: ${{ steps.version.outputs.value }}
-        run: ./packaging/Test-Installers.ps1 -Version $env:BOSS_SENSOR_VERSION -InstallerDirectory ./target/distribution
+          FISHING_VERSION: ${{ steps.version.outputs.value }}
+        run: ./packaging/Test-Installers.ps1 -Version $env:FISHING_VERSION -InstallerDirectory ./target/distribution
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         with:
-          name: BossSensor-windows-x64
+          name: fishing-windows-x64
           path: target/distribution/
           if-no-files-found: error
           compression-level: 0
@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: BossSensor-windows-x64
+          name: fishing-windows-x64
           path: distribution
 
       - name: Verify and publish installers
@@ -119,4 +119,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           sha256sum --check SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "BossSensor $GITHUB_REF_NAME" ./*.exe ./*.msi SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "fishing $GITHUB_REF_NAME" ./*.exe ./*.msi SHA256SUMS.txt

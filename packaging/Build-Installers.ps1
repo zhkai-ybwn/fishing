@@ -47,7 +47,7 @@ function Invoke-WixBuild([string[]]$Arguments) {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
-$iconPath = (Resolve-Path -LiteralPath (Join-Path $root 'assets/BossSensor.ico')).Path
+$iconPath = (Resolve-Path -LiteralPath (Join-Path $root 'assets/fishing.ico')).Path
 $runtime = & (Join-Path $PSScriptRoot 'Get-OnnxRuntime.ps1')
 $redist = Find-VcRedistDirectory
 $output = (New-Item -ItemType Directory -Force -Path $OutputDirectory).FullName
@@ -56,8 +56,8 @@ $scratch = (New-Item -ItemType Directory -Path (Join-Path $scratchRoot ([Guid]::
 
 try {
     $payload = (New-Item -ItemType Directory -Path (Join-Path $scratch 'payload')).FullName
-    Copy-Item -LiteralPath (Join-Path $BuildDirectory 'BossSensor.exe') -Destination $payload
-    Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $payload 'BossSensor-LICENSE.txt')
+    Copy-Item -LiteralPath (Join-Path $BuildDirectory 'fishing.exe') -Destination $payload
+    Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $payload 'fishing-LICENSE.txt')
 
     foreach ($name in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll',
                        'ONNX-Runtime-LICENSE.txt', 'ONNX-Runtime-ThirdPartyNotices.txt')) {
@@ -82,7 +82,7 @@ try {
         $includeNotices = 'yes'
     }
 
-    $baseName = "BossSensor-$Version-windows-x64"
+    $baseName = "fishing-$Version-windows-x64"
     $msi = Join-Path $scratch "$baseName.msi"
     $exe = Join-Path $scratch "$baseName-setup.exe"
 

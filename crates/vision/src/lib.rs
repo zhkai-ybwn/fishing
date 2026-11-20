@@ -1,5 +1,6 @@
 //! Local CPU face detection and identification with OpenCV Zoo model weights.
 
+mod photo;
 mod pixels;
 
 use ort::session::builder::GraphOptimizationLevel;
@@ -7,6 +8,8 @@ use ort::session::{Session, SessionOutputs};
 use ort::value::Tensor;
 use pixels::Image;
 use std::path::PathBuf;
+
+pub use photo::enroll_photo;
 
 pub const EMBEDDING_MODEL: &str = "sface-2021dec-fp32-v1";
 pub const EMBEDDING_LEN: usize = 128;
@@ -50,24 +53,33 @@ impl Vision {
     ) -> Result<Observation, String> {
         let image = Image::new(rgb, width as usize, height as usize)?;
         let faces = detect(&mut self.detector, &image)?;
-        let mut embeddings = Vec::new();
-        if identify && !faces.is_empty() {
-            if self.recognizer.is_none() {
-                self.recognizer =
-                    Some(new_session(SFACE).map_err(|error| format!("SFace: {error}"))?);
-            }
-            if let Some(recognizer) = self.recognizer.as_mut() {
-                for face in &faces {
-                    if let Some(aligned) = image.aligned_face(&face.landmarks) {
-                        embeddings.push(embed(recognizer, aligned)?);
-                    }
-                }
-            }
-        }
+        let embeddings = if identify {
+            self.recognize(&image, &faces)?
+        } else {
+            Vec::new()
+        };
         Ok(Observation {
             face_count: faces.len(),
             embeddings,
         })
+    }
+
+    fn recognize(&mut self, image: &Image<'_>, faces: &[Face]) -> Result<Vec<Vec<f32>>, String> {
+        if faces.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.recognizer.is_none() {
+            self.recognizer = Some(new_session(SFACE).map_err(|error| format!("SFace: {error}"))?);
+        }
+        let recognizer = self
+            .recognizer
+            .as_mut()
+            .expect("the recognizer was initialized");
+        faces
+            .iter()
+            .filter_map(|face| image.aligned_face(&face.landmarks))
+            .map(|aligned| embed(recognizer, aligned))
+            .collect()
     }
 }
 
@@ -89,7 +101,7 @@ fn initialize_runtime() -> Result<(), String> {
     };
     if !library.is_file() {
         return Err(format!(
-            "ONNX Runtime library not found at {}",
+            "找不到 ONNX Runtime（{}）。从源码构建时请先运行 .\\packaging\\Get-OnnxRuntime.ps1，再重新构建；安装版请重新安装。",
             library.display()
         ));
     }

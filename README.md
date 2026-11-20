@@ -1,31 +1,42 @@
-<img src="assets/BossSensor.png" width="64" height="64" alt="BossSensor logo" />
+<div align="center">
+  <img src="assets/fishing.png" width="116" height="116" alt="fishing 小鱼标志" />
+  <h1>fishing</h1>
+  <p>Windows 桌面摸鱼助手</p>
+</div>
 
-# BossSensor
+把摄像头画面放在桌面角落，有人走近时可以提醒你，也可以切到预选的工作窗口。悬浮预览、识别条件和触发动作都能单独设置。
 
-BossSensor 是一个本地运行的 Windows 摄像头工具。可以把实时画面放在置顶小窗里，也可以在识别到指定人员或第二张脸时提示、切换到选好的应用窗口。
+## 怎么用
 
-## 安装和使用
+| 场景 | 设置 |
+| --- | --- |
+| 只想随时瞄一眼 | 打开「置顶实时预览」 |
+| 想知道有同事走近 | 打开「画面中出现第二张脸」，让自己留在画面里 |
+| 想在某人出现时收到提醒 | 启用「识别指定人员」，录入照片，再打开「显示桌面提示」 |
+| 想自动切到工作窗口 | 打开「切到目标应用」，从已打开的应用或窗口里选目标 |
 
-1. 安装已验证的 Windows x64 `Setup.exe` 或 `.msi`，然后打开 BossSensor。公开安装包会在本地验收后提供。 [GitHub Releases](https://github.com/zhkai-ybwn/fishing/releases)
-2. 选择摄像头。按需打开置顶预览、触发条件和触发动作，然后点击「启动」。只打开预览即可查看画面。
-3. 要识别指定人员，输入名称并点击「录入」。让同意录入的人单独正对摄像头，直到设置页显示录入成功。
-4. 要自动切屏，先打开工作应用，再从目标列表选应用或具体窗口。如果同一应用打开了多个窗口，选择具体窗口可消除歧义。
+配好后点击「启动」。Windows 有时会限制后台程序切换前台窗口。发生时，主窗口会显示切换结果，已开启的提示仍会发出。
 
-「第二张脸」以同一帧可见的人脸数为准。让自己的脸留在画面中，便于区分是否有人进入。指定人员匹配和人数判断的效果受距离、光线和遮挡影响。每条规则在稳定命中后触发一次，离开后重新就绪。
+### 从照片录入
 
-Windows 可能拒绝后台程序激活其他窗口。发生时，设置页显示切屏失败，已开启的桌面提示仍会显示。摄像头帧只用于当前预览和推理。配置和录入的人脸特征保存在 `%LOCALAPPDATA%\BossSensor\settings.json`，可在设置页移除已录入人员。
+在「触发条件」打开「识别指定人员」，填一个名称，点「从照片录入…」。选一张你有权使用的 JPG 或 PNG，照片里要有一张清晰正脸。对方在场时，也可以点「摄像头录入」。
 
-## 从源码构建
+画面和导入的照片都在本机处理。保存的是用来比对的特征和名称，随时可以在设置里移除。检测效果受拍摄距离、光线和遮挡影响。
 
-开发环境需要 Windows x64、PowerShell 7、Rust 1.90.0 和 Visual Studio 2022 的 C++ x64 构建工具。运行：
+## 安装
+
+首版支持 Windows x64。验收完成后会提供 EXE 和 MSI 两种安装包。使用免安装版时，从完整目录运行 `fishing.exe`，同目录 DLL 一起保留。 [GitHub Releases](https://github.com/zhkai-ybwn/fishing/releases)
+
+## 从源码运行
+
+使用 Windows x64、PowerShell 7、Rust 1.90.0 和 Visual Studio 2022 C++ 构建工具。
 
 ```powershell
 ./packaging/Prepare-Assets.ps1
-$runtime = & ./packaging/Get-OnnxRuntime.ps1
-$env:ORT_DYLIB_PATH = Join-Path $runtime 'onnxruntime.dll'
-cargo run --locked --bin BossSensor
+./packaging/Get-OnnxRuntime.ps1
+cargo run --locked --bin fishing
 ```
 
-脚本下载固定版本的模型、字体和 ONNX Runtime，并核对 SHA-256。发布构建把模型与字体嵌入程序，安装包同时带上运行库，安装后即可离线使用。
+前两步下载并校验固定版本的模型、字体和运行库。构建会把 ONNX Runtime DLL 放到程序同目录。如果旧构建报 `ONNX Runtime library not found`，按上面的顺序准备依赖并重新构建，再运行新的 `fishing.exe`。
 
-维护、验证和发布步骤见 [CONTRIBUTING.md](CONTRIBUTING.md)。项目许可见 [LICENSE](LICENSE)，模型和运行库许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+[贡献和发布流程](CONTRIBUTING.md) · [MIT 许可证](LICENSE) · [模型及依赖许可](THIRD_PARTY_NOTICES.md)

@@ -1,6 +1,6 @@
-# Contributing to BossSensor
+# Contributing to fishing
 
-BossSensor targets Windows x64. Read the build instructions in [README.md](README.md) to prepare the development environment.
+fishing targets Windows x64. Read the build instructions in [README.md](README.md) to prepare the development environment.
 
 ## Code boundaries
 
@@ -29,8 +29,9 @@ Install WiX 6.0.2 with the matching `WixToolset.BootstrapperApplications.wixext`
 
 ```powershell
 ./packaging/Prepare-Assets.ps1
+./packaging/Get-OnnxRuntime.ps1
 wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
-cargo build --release --locked --bin BossSensor
+cargo build --release --locked --bin fishing
 ./packaging/Build-Installers.ps1 -Version 0.1.0
 ```
 

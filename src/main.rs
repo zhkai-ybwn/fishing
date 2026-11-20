@@ -14,7 +14,7 @@ fn main() -> eframe::Result {
         match test_inference() {
             Ok(()) => return Ok(()),
             Err(error) => {
-                eprintln!("BossSensor self-test: {error}");
+                eprintln!("fishing self-test: {error}");
                 std::process::exit(1);
             }
         }
@@ -28,9 +28,9 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "BossSensor",
+        brand::NAME,
         options,
-        Box::new(|context| Ok(Box::new(app::BossSensor::new(&context.egui_ctx)))),
+        Box::new(|context| Ok(Box::new(app::Fishing::new(&context.egui_ctx)))),
     )
 }
 

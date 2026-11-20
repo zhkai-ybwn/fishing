@@ -1,7 +1,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-  <Bundle Name="BossSensor"
-          Manufacturer="BossSensor contributors"
+  <Bundle Name="fishing"
+          Manufacturer="fishing contributors"
           Version="$(Version)"
           UpgradeCode="{460EC1B8-E97B-4F5B-B232-7A4B6218D6BA}"
           AboutUrl="https://github.com/zhkai-ybwn/fishing"

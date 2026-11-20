@@ -214,7 +214,7 @@ fn paint(window: HWND) {
         let block_top = (rect.bottom - scale(42, dpi)) / 2;
         draw_line(
             dc,
-            w!("BossSensor"),
+            w!("fishing"),
             RECT {
                 left: text_left,
                 top: block_top,

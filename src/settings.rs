@@ -70,6 +70,7 @@ pub struct Storage {
 impl Storage {
     pub fn open() -> Result<Self, String> {
         let local_data = std::env::var_os("LOCALAPPDATA").ok_or("找不到 Windows 用户数据目录")?;
+        // Keep the original data directory so renamed clients load existing settings.
         let directory = PathBuf::from(local_data).join("BossSensor");
         fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         let lock = File::options()
@@ -80,7 +81,7 @@ impl Storage {
             .open(directory.join("instance.lock"))
             .map_err(|error| error.to_string())?;
         lock.try_lock()
-            .map_err(|error| format!("无法启动，可能已有 BossSensor 实例运行 · {error}"))?;
+            .map_err(|error| format!("无法启动，可能已有 fishing 实例运行 · {error}"))?;
         Ok(Self {
             path: directory.join("settings.json"),
             _instance_lock: lock,

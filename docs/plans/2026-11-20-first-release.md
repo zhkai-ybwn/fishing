@@ -1,4 +1,4 @@
-# BossSensor first release implementation plan
+# fishing first release implementation plan
 
 **Goal.** Ship an offline Windows x64 client with an optional live preview, configurable local detection, and EXE and MSI installers.
 

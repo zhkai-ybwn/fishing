@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use boss_sensor_platform::{self as platform, CameraInfo, WindowInfo, WindowTarget};
@@ -11,12 +13,18 @@ use crate::{brand, ui as design};
 
 const STALE_FRAME: Duration = Duration::from_secs(2);
 
-struct Enrollment {
-    name: String,
-    started: Instant,
+enum Enrollment {
+    Camera {
+        name: String,
+        started: Instant,
+    },
+    Photo {
+        name: String,
+        result: Receiver<Result<Vec<f32>, String>>,
+    },
 }
 
-pub struct BossSensor {
+pub struct Fishing {
     settings: Settings,
     storage: Option<Storage>,
     save_enabled: bool,
@@ -39,7 +47,7 @@ pub struct BossSensor {
     logo: TextureHandle,
 }
 
-impl BossSensor {
+impl Fishing {
     pub fn new(ctx: &Context) -> Self {
         configure_ui(ctx);
         let (settings, storage, save_error, mut startup_error) = match Storage::open() {
@@ -105,8 +113,9 @@ impl BossSensor {
     }
 
     fn configure_engine(&mut self) {
-        let enrolling = self.enrollment.is_some();
-        let policy = if self.running && !enrolling {
+        let recording = matches!(self.enrollment, Some(Enrollment::Camera { .. }));
+        let importing = matches!(self.enrollment, Some(Enrollment::Photo { .. }));
+        let policy = if self.running && self.enrollment.is_none() {
             Policy {
                 second_face: self.settings.second_face,
                 templates: if self.settings.recognize {
@@ -129,9 +138,10 @@ impl BossSensor {
         } else {
             Policy::default()
         };
-        let identify = enrolling || !policy.templates.is_empty();
+        let identify = recording || !policy.templates.is_empty();
         let analyze = identify || policy.second_face;
-        let job = ((self.running && self.settings.preview) || analyze).then(|| Job {
+        let preview = self.settings.preview && self.running && !importing;
+        let job = (preview || analyze).then(|| Job {
             camera: self.settings.camera_id.clone().unwrap_or_default(),
             analyze,
             identify,
@@ -166,27 +176,88 @@ impl BossSensor {
             ));
         }
 
-        let Some(enrollment) = &self.enrollment else {
-            return;
+        let (name, result) = match &self.enrollment {
+            Some(Enrollment::Camera { name, started }) => {
+                if started.elapsed() > Duration::from_secs(10) {
+                    (
+                        name,
+                        Err("录入超时。请让一张正面人脸出现在画面中，再试一次。".into()),
+                    )
+                } else if let Some(reading) = &snapshot.reading
+                    && reading.at > *started
+                    && reading.at.elapsed() < STALE_FRAME
+                    && reading.observation.face_count == 1
+                    && let [embedding] = reading.observation.embeddings.as_slice()
+                {
+                    (name, Ok(embedding.clone()))
+                } else {
+                    return;
+                }
+            }
+            Some(Enrollment::Photo { name, result }) => match result.try_recv() {
+                Ok(result) => (name, result),
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => (name, Err("照片识别中断，请重试。".into())),
+            },
+            None => return,
         };
-        if enrollment.started.elapsed() > Duration::from_secs(10) {
-            self.enrollment = None;
-            self.enrollment_label =
-                Some("录入超时。请让一张正面人脸出现在画面中，再试一次。".into());
+        self.enrollment_label = match result {
+            Ok(embedding) => {
+                self.settings
+                    .people
+                    .push(Person::new(name.clone(), embedding));
+                self.person_name.clear();
+                Some(format!("已录入 {name}"))
+            }
+            Err(error) => Some(error),
+        };
+        self.enrollment = None;
+    }
+
+    fn begin_enrollment(&mut self, name: String, from_photo: bool) {
+        if self
+            .settings
+            .people
+            .iter()
+            .any(|person| person.name == name)
+        {
+            self.enrollment_label = Some("该名称已存在。".into());
             return;
         }
-        if let Some(reading) = &snapshot.reading
-            && reading.at > enrollment.started
-            && reading.at.elapsed() < STALE_FRAME
-            && reading.observation.face_count == 1
-            && let [embedding] = reading.observation.embeddings.as_slice()
-        {
-            self.settings
-                .people
-                .push(Person::new(enrollment.name.clone(), embedding.clone()));
-            self.enrollment_label = Some(format!("已录入 {}", enrollment.name));
-            self.person_name.clear();
-            self.enrollment = None;
+        if !from_photo {
+            self.enrollment = Some(Enrollment::Camera {
+                name,
+                started: Instant::now(),
+            });
+            self.enrollment_label = None;
+            return;
+        }
+
+        // Suspend auto-switching while the native file picker has focus.
+        if let Some(engine) = &self.engine {
+            engine.configure(None);
+        }
+        self.job = None;
+        self.texture = None;
+        match platform::choose_portrait() {
+            Ok(Some(path)) => {
+                let (sender, result) = mpsc::channel();
+                match thread::Builder::new()
+                    .name("photo-enrollment".into())
+                    .spawn(move || {
+                        let _ = sender.send(boss_sensor_vision::enroll_photo(&path));
+                    }) {
+                    Ok(_) => {
+                        self.enrollment = Some(Enrollment::Photo { name, result });
+                        self.enrollment_label = None;
+                    }
+                    Err(error) => {
+                        self.enrollment_label = Some(format!("无法启动照片识别。{error}"))
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.enrollment_label = Some(error),
         }
     }
 
@@ -262,50 +333,46 @@ impl BossSensor {
             if let Some(index) = remove {
                 self.settings.people.remove(index);
             }
-            if self.enrollment.is_some() {
+            if let Some(enrollment) = &self.enrollment {
+                let label = match enrollment {
+                    Enrollment::Camera { .. } => "等待一张清晰的人脸…",
+                    Enrollment::Photo { .. } => "正在识别照片…",
+                };
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("等待一张清晰的人脸…");
+                    ui.label(label);
                     if ui.button("取消").clicked() {
                         self.enrollment = None;
                     }
                 });
             } else {
+                let input_width = ui.available_width().min(300.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.person_name)
+                        .hint_text("人员名称")
+                        .char_limit(48)
+                        .desired_width(input_width),
+                );
                 let name = self.person_name.trim().to_owned();
+                let can_enroll = !name.is_empty() && self.engine.is_some();
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.person_name)
-                            .hint_text("人员名称")
-                            .char_limit(48)
-                            .desired_width(230.0),
-                    );
                     if ui
-                        .add_enabled(
-                            !name.is_empty() && self.engine.is_some(),
-                            egui::Button::new("录入"),
-                        )
+                        .add_enabled(can_enroll, egui::Button::new("从照片录入…"))
                         .clicked()
                     {
-                        if self
-                            .settings
-                            .people
-                            .iter()
-                            .any(|person| person.name == name)
-                        {
-                            self.enrollment_label = Some("该名称已存在。".into());
-                        } else {
-                            self.enrollment = Some(Enrollment {
-                                name,
-                                started: Instant::now(),
-                            });
-                            self.enrollment_label = None;
-                        }
+                        self.begin_enrollment(name.clone(), true);
+                    }
+                    if ui
+                        .add_enabled(can_enroll, egui::Button::new("摄像头录入"))
+                        .clicked()
+                    {
+                        self.begin_enrollment(name, false);
                     }
                 });
                 if let Some(label) = &self.enrollment_label {
                     ui.weak(label);
                 } else {
-                    ui.weak("录入时让画面中只有一人。仅在本机保存识别特征。");
+                    ui.weak("选一张只有目标人物的清晰正脸照，照片仅用于提取特征。");
                 }
             }
         });
@@ -380,7 +447,10 @@ impl BossSensor {
     }
 
     fn preview(&mut self, ctx: &Context, snapshot: &Snapshot) {
-        if !self.settings.preview || (!self.running && self.enrollment.is_none()) {
+        if !self.settings.preview
+            || (!self.running && self.enrollment.is_none())
+            || matches!(self.enrollment, Some(Enrollment::Photo { .. }))
+        {
             self.texture = None;
             return;
         }
@@ -409,7 +479,7 @@ impl BossSensor {
         }
 
         let mut builder = egui::ViewportBuilder::default()
-            .with_title("BossSensor 预览")
+            .with_title("fishing 预览")
             .with_icon(brand::window_icon())
             .with_inner_size([320.0, 192.0])
             .with_min_inner_size([175.0, 120.0])
@@ -460,7 +530,7 @@ impl BossSensor {
     }
 }
 
-impl eframe::App for BossSensor {
+impl eframe::App for Fishing {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         let initial = self.settings.clone();
         let snapshot = self
@@ -479,8 +549,8 @@ impl eframe::App for BossSensor {
                 ui.horizontal(|ui| {
                     ui.image((self.logo.id(), Vec2::splat(42.0)));
                     ui.vertical(|ui| {
-                        ui.label(RichText::new("BossSensor").size(25.0).strong());
-                        ui.label(RichText::new("摄像头预览与来人提醒").small().weak());
+                        ui.label(RichText::new(brand::NAME).size(25.0).strong());
+                        ui.label(RichText::new("桌面摸鱼助手").small().weak());
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let label = if self.running { "暂停" } else { "启动" };
@@ -514,6 +584,8 @@ impl eframe::App for BossSensor {
                     format!("摄像头不可用 · {error}")
                 } else if let Some(error) = &snapshot.vision_error {
                     format!("识别不可用 · {error}")
+                } else if matches!(self.enrollment, Some(Enrollment::Photo { .. })) {
+                    "正在录入照片…".into()
                 } else if self.enrollment.is_some() {
                     "录入中 · 等待一张人脸".into()
                 } else if !self.running {
@@ -591,7 +663,7 @@ impl eframe::App for BossSensor {
                 .err()
                 .map(|error| format!("设置保存失败 · {error}"));
         }
-        if self.job.is_some() {
+        if self.job.is_some() || self.enrollment.is_some() {
             ctx.request_repaint_after(Duration::from_millis(40));
         }
     }

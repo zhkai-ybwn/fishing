@@ -1,6 +1,6 @@
 # Third-party notices
 
-BossSensor source code is MIT-licensed. Bundled model weights and runtime libraries retain their own licenses.
+fishing source code is MIT-licensed. Bundled model weights and runtime libraries retain their own licenses.
 
 | Component | License and source |
 | --- | --- |

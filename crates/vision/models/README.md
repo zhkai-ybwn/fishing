@@ -1,6 +1,6 @@
 # Bundled vision models
 
-Weights come from [OpenCV Zoo commit `48b10fa`](https://github.com/opencv/opencv_zoo/tree/48b10fa505aeb51fbd127fc60a5c660040e823b7/models). BossSensor embeds the weights in its executable. Model inference takes place locally with ONNX Runtime.
+Weights come from [OpenCV Zoo commit `48b10fa`](https://github.com/opencv/opencv_zoo/tree/48b10fa505aeb51fbd127fc60a5c660040e823b7/models). fishing embeds the weights in its executable. Model inference takes place locally with ONNX Runtime.
 
 Run `./packaging/Prepare-Assets.ps1` from the repository root to fetch and verify the two weight files before compiling.
 

@@ -37,7 +37,7 @@ $packages = $metadata.packages |
 
 $writer = [IO.StreamWriter]::new([IO.Path]::GetFullPath($OutputPath), $false)
 try {
-    $writer.WriteLine('BossSensor Rust dependency notices')
+    $writer.WriteLine('fishing Rust dependency notices')
     $writer.WriteLine("Resolved from Cargo.lock for $target.")
     foreach ($package in $packages) {
         $writer.WriteLine()

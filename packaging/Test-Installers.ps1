@@ -11,19 +11,19 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $installPath = Join-Path $env:LOCALAPPDATA 'Programs/BossSensor'
-$app = Join-Path $installPath 'BossSensor.exe'
+$app = Join-Path $installPath 'fishing.exe'
 if (Test-Path -LiteralPath $installPath) {
-    throw 'Use a clean test user. A BossSensor installation directory already exists.'
+    throw 'Use a clean test user. The fishing installation directory already exists.'
 }
 
 $directory = (Resolve-Path -LiteralPath $InstallerDirectory).Path
-$baseName = "BossSensor-$Version-windows-x64"
+$baseName = "fishing-$Version-windows-x64"
 $msi = (Resolve-Path -LiteralPath (Join-Path $directory "$baseName.msi")).Path
 $exe = (Resolve-Path -LiteralPath (Join-Path $directory "$baseName-setup.exe")).Path
 $msiexec = Join-Path $env:WINDIR 'System32/msiexec.exe'
 
 function Invoke-Installer([string]$Program, [string]$Arguments, [string]$LogSwitch, [string]$LogName) {
-    $log = Join-Path $env:TEMP "BossSensor-$Version-$LogName.log"
+    $log = Join-Path $env:TEMP "fishing-$Version-$LogName.log"
     $process = Start-Process -FilePath $Program -ArgumentList "$Arguments $LogSwitch `"$log`"" `
         -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) {
@@ -33,7 +33,7 @@ function Invoke-Installer([string]$Program, [string]$Arguments, [string]$LogSwit
 }
 
 function Test-InstalledApplication {
-    foreach ($name in @('BossSensor.exe', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll',
+    foreach ($name in @('fishing.exe', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll',
                        'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll',
                        'Rust-Dependency-Licenses.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $installPath $name) -PathType Leaf)) {

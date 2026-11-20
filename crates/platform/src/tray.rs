@@ -34,14 +34,17 @@ use windows_sys::{
             WindowsAndMessaging::{
                 AppendMenuW, CREATESTRUCTW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
                 DestroyMenu, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos,
-                GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, IDI_APPLICATION,
-                IMAGE_ICON, IsIconic, IsWindow, KillTimer, LR_SHARED, LoadIconW, LoadImageW,
-                MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
-                RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SW_RESTORE, SetForegroundWindow,
-                SetMenuDefaultItem, SetTimer, SetWindowLongPtrW, ShowWindowAsync, TPM_NONOTIFY,
-                TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
-                WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_NULL, WM_RBUTTONUP,
-                WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+                GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, HWND_TOP, IDI_APPLICATION,
+                IMAGE_ICON, IsIconic, IsWindow, KillTimer, LR_SHARED, LWA_ALPHA, LoadIconW,
+                LoadImageW, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+                RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON,
+                SM_MENUDROPALIGNMENT, SW_HIDE, SW_RESTORE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                SetForegroundWindow, SetLayeredWindowAttributes, SetMenuDefaultItem, SetTimer,
+                SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TPM_LEFTALIGN,
+                TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPMPARAMS,
+                TrackPopupMenuEx, TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
+                WM_LBUTTONDBLCLK, WM_NCCREATE, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+                WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -53,6 +56,8 @@ const CLASS_NAME: PCWSTR = w!("fishing.Tray");
 const ICON_RESOURCE: usize = 1;
 const ICON_ID: u32 = 1;
 const TRAY_CALLBACK: u32 = WM_APP + 14;
+const TRACK_TRAY_MENU: u32 = WM_APP + 15;
+const TRAY_MENU_CLOSED: u32 = WM_APP + 16;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const MENU_OPEN: usize = 1;
 const MENU_TOGGLE: usize = 2;
@@ -153,6 +158,8 @@ struct TrayState {
     running: Arc<AtomicBool>,
     taskbar_hidden: Arc<AtomicBool>,
     pending_wake: Cell<bool>,
+    menu_open: Cell<bool>,
+    menu_position: Cell<Option<MenuPosition>>,
 }
 
 fn tray_loop(
@@ -190,6 +197,8 @@ fn tray_loop(
         running,
         taskbar_hidden,
         pending_wake: Cell::new(false),
+        menu_open: Cell::new(false),
+        menu_position: Cell::new(None),
     };
     let window = match create_window(instance, &mut state) {
         Ok(window) => window,
@@ -238,16 +247,17 @@ fn create_window(instance: HINSTANCE, state: &mut TrayState) -> io::Result<HWND>
         if RegisterClassW(&class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
             return Err(io::Error::last_os_error());
         }
-        // A hidden top-level window receives Explorer's TaskbarCreated broadcast.
+        // A top-level window receives Explorer's TaskbarCreated broadcast and
+        // can briefly become the foreground owner of the tray menu.
         let window = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WS_EX_TOOLWINDOW | WS_EX_LAYERED,
             CLASS_NAME,
             w!("fishing"),
-            WS_OVERLAPPED,
+            WS_POPUP,
             0,
             0,
-            0,
-            0,
+            1,
+            1,
             ptr::null_mut(),
             ptr::null_mut(),
             instance,
@@ -255,6 +265,11 @@ fn create_window(instance: HINSTANCE, state: &mut TrayState) -> io::Result<HWND>
         );
         if window.is_null() {
             return Err(io::Error::last_os_error());
+        }
+        if SetLayeredWindowAttributes(window, 0, 0, LWA_ALPHA) == 0 {
+            let error = io::Error::last_os_error();
+            DestroyWindow(window);
+            return Err(error);
         }
         Ok(window)
     }
@@ -350,29 +365,30 @@ unsafe extern "system" fn window_proc(
             }
             if message == TRAY_CALLBACK {
                 let event = lparam as u32 & 0xFFFF;
-                let action = match event {
-                    NIN_SELECT | NIN_KEYSELECT | WM_LBUTTONDBLCLK => Some(TrayAction::Open),
-                    WM_CONTEXTMENU | WM_RBUTTONUP => show_menu(window, state),
-                    _ => None,
-                };
-                if let Some(action) = action {
-                    if action == TrayAction::Open {
-                        // Restore natively so this works even when a repaint
-                        // requested from Rust won't wake a hidden settings window.
-                        if IsIconic(state.main_window) != 0 {
-                            ShowWindowAsync(state.main_window, SW_RESTORE);
-                        }
-                        SetForegroundWindow(state.main_window);
+                match event {
+                    NIN_SELECT | NIN_KEYSELECT | WM_LBUTTONDBLCLK if !state.menu_open.get() => {
+                        dispatch_action(state, TrayAction::Open);
                     }
-                    if state.actions.send(action).is_ok() {
-                        state.pending_wake.set(true);
+                    WM_CONTEXTMENU | WM_RBUTTONUP => {
+                        let mouse_position = (event == WM_RBUTTONUP
+                            && lparam as u32 >> 16 == ICON_ID)
+                            .then(|| callback_point(wparam));
+                        queue_menu(window, state, mouse_position);
                     }
-                    if action == TrayAction::Quit {
-                        // A native close reaches winit even when the main window
-                        // is minimized and not currently painting.
-                        PostMessageW(state.main_window, WM_CLOSE, 0, 0);
-                    }
+                    _ => {}
                 }
+                return 0;
+            }
+            if message == TRACK_TRAY_MENU {
+                if let Some(position) = state.menu_position.take()
+                    && let Some(action) = show_menu(window, state, position)
+                {
+                    dispatch_action(state, action);
+                }
+                return 0;
+            }
+            if message == TRAY_MENU_CLOSED {
+                state.menu_open.set(false);
                 return 0;
             }
         }
@@ -380,15 +396,105 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-fn show_menu(window: HWND, state: &TrayState) -> Option<TrayAction> {
+fn dispatch_action(state: &TrayState, action: TrayAction) {
+    // SAFETY: The handle belongs to our settings window. Asynchronous requests
+    // fail harmlessly if settings closes while the tray action is processed.
+    unsafe {
+        if action == TrayAction::Open {
+            // Restore natively so this works even if a repaint won't wake a
+            // hidden settings window.
+            if IsIconic(state.main_window) != 0 {
+                ShowWindowAsync(state.main_window, SW_RESTORE);
+            }
+            SetForegroundWindow(state.main_window);
+        }
+        if state.actions.send(action).is_ok() {
+            state.pending_wake.set(true);
+        }
+        if action == TrayAction::Quit {
+            PostMessageW(state.main_window, WM_CLOSE, 0, 0);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MenuPosition {
+    anchor: POINT,
+    icon_bounds: Option<RECT>,
+}
+
+fn queue_menu(window: HWND, state: &TrayState, mouse_position: Option<POINT>) {
+    // Ignore overlapping button-release/context-menu events from the Shell.
+    if state.menu_open.replace(true) {
+        return;
+    }
+    let icon_bounds = icon_bounds(window);
+    let anchor = mouse_position.unwrap_or_else(|| {
+        icon_bounds.map_or_else(cursor_position, |bounds| POINT {
+            x: bounds.left + (bounds.right - bounds.left) / 2,
+            y: bounds.top + (bounds.bottom - bounds.top) / 2,
+        })
+    });
+
+    // SAFETY: This is the tray window's owning thread. The alpha-zero tool
+    // window remains invisible while becoming eligible to own the native menu.
+    unsafe {
+        if SetWindowPos(
+            window,
+            HWND_TOP,
+            anchor.x,
+            anchor.y,
+            1,
+            1,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        ) == 0
+        {
+            state.menu_open.set(false);
+            return;
+        }
+        SetForegroundWindow(window);
+        state.menu_position.set(Some(MenuPosition {
+            anchor,
+            icon_bounds,
+        }));
+        // Return from the Shell callback before entering the menu's message loop.
+        if PostMessageW(window, TRACK_TRAY_MENU, 0, 0) == 0 {
+            state.menu_position.set(None);
+            state.menu_open.set(false);
+            ShowWindow(window, SW_HIDE);
+        }
+    }
+}
+
+fn show_menu(window: HWND, state: &TrayState, position: MenuPosition) -> Option<TrayAction> {
     let toggle = if state.running.load(Ordering::Relaxed) {
         w!("暂停")
     } else {
         w!("启动")
     };
-    let anchor = menu_anchor(window);
+    let result = track_menu(window, toggle, position);
+    // SAFETY: On return from the native menu, restore the tray owner to its
+    // usual hidden state and consume any already queued duplicate requests.
+    unsafe {
+        ShowWindow(window, SW_HIDE);
+        PostMessageW(window, WM_NULL, 0, 0);
+        if PostMessageW(window, TRAY_MENU_CLOSED, 0, 0) == 0 {
+            state.menu_open.set(false);
+        }
+        if result.is_none() {
+            Shell_NotifyIconW(NIM_SETFOCUS, &icon_data(window));
+        }
+    }
+    result
+}
+
+fn track_menu(window: HWND, toggle: PCWSTR, position: MenuPosition) -> Option<TrayAction> {
+    let parameters = position.icon_bounds.map(|bounds| TPMPARAMS {
+        cbSize: std::mem::size_of::<TPMPARAMS>() as u32,
+        rcExclude: bounds,
+    });
     // SAFETY: All menu strings are static and the menu is destroyed after use.
-    // TrackPopupMenu runs on the window's owning thread.
+    // TrackPopupMenuEx runs on the window's owning thread.
     let selection = unsafe {
         let menu = CreatePopupMenu();
         if menu.is_null() {
@@ -401,22 +507,19 @@ fn show_menu(window: HWND, state: &TrayState) -> Option<TrayAction> {
         let mut selection = 0;
         if populated {
             SetMenuDefaultItem(menu, MENU_OPEN as u32, 0);
-            SetForegroundWindow(window);
-            selection = TrackPopupMenu(
+            let alignment = if GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0 {
+                TPM_RIGHTALIGN
+            } else {
+                TPM_LEFTALIGN
+            };
+            selection = TrackPopupMenuEx(
                 menu,
-                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                anchor.x,
-                anchor.y,
-                0,
+                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | alignment,
+                position.anchor.x,
+                position.anchor.y,
                 window,
-                ptr::null(),
+                parameters.as_ref().map_or(ptr::null(), ptr::from_ref),
             );
-            // Microsoft's tray menu guidance requires posting a benign message
-            // to reset the menu's foreground behavior for repeated openings.
-            PostMessageW(window, WM_NULL, 0, 0);
-            if selection == 0 {
-                Shell_NotifyIconW(NIM_SETFOCUS, &icon_data(window));
-            }
         }
         DestroyMenu(menu);
         selection
@@ -424,7 +527,7 @@ fn show_menu(window: HWND, state: &TrayState) -> Option<TrayAction> {
     action_from_menu(selection as usize)
 }
 
-fn menu_anchor(window: HWND) -> POINT {
+fn icon_bounds(window: HWND) -> Option<RECT> {
     let identifier = NOTIFYICONIDENTIFIER {
         cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
         hWnd: window,
@@ -432,17 +535,25 @@ fn menu_anchor(window: HWND) -> POINT {
         ..Default::default()
     };
     let mut bounds = RECT::default();
+    // SAFETY: The tray identifier and rectangle output pointers are valid.
+    (unsafe { Shell_NotifyIconGetRect(&identifier, &mut bounds) } >= 0
+        && bounds.left < bounds.right
+        && bounds.top < bounds.bottom)
+        .then_some(bounds)
+}
+
+fn cursor_position() -> POINT {
     let mut position = POINT::default();
-    // SAFETY: The tray identifier and position output pointers are valid.
-    unsafe {
-        if Shell_NotifyIconGetRect(&identifier, &mut bounds) == 0 {
-            position.x = (bounds.left + bounds.right) / 2;
-            position.y = (bounds.top + bounds.bottom) / 2;
-        } else {
-            GetCursorPos(&mut position);
-        }
-    }
+    // SAFETY: The position output pointer is valid.
+    unsafe { GetCursorPos(&mut position) };
     position
+}
+
+fn callback_point(packed: WPARAM) -> POINT {
+    POINT {
+        x: i32::from(packed as i16),
+        y: i32::from((packed >> 16) as i16),
+    }
 }
 
 fn action_from_menu(selection: usize) -> Option<TrayAction> {
@@ -468,5 +579,13 @@ mod tests {
         assert_eq!(action_from_menu(MENU_OPEN), Some(TrayAction::Open));
         assert_eq!(action_from_menu(MENU_TOGGLE), Some(TrayAction::Toggle));
         assert_eq!(action_from_menu(MENU_QUIT), Some(TrayAction::Quit));
+    }
+
+    #[test]
+    fn version_four_mouse_position_uses_signed_screen_coordinates() {
+        let packed = (usize::from(1080_u16) << 16) | usize::from(-129_i16 as u16);
+        let point = callback_point(packed);
+        assert_eq!(point.x, -129);
+        assert_eq!(point.y, 1080);
     }
 }

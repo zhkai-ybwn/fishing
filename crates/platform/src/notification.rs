@@ -5,19 +5,18 @@ use windows_sys::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute},
         Graphics::Gdi::{
-            BeginPaint, COLOR_WINDOW, COLOR_WINDOWTEXT, CreateFontW, DT_END_ELLIPSIS, DT_NOPREFIX,
-            DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint, FW_NORMAL, FW_SEMIBOLD,
-            FillRect, GetMonitorInfoW, GetSysColor, GetSysColorBrush, HDC,
-            MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow, PAINTSTRUCT, SelectObject,
-            SetBkMode, SetTextColor, TRANSPARENT,
+            BeginPaint, COLOR_WINDOW, COLOR_WINDOWTEXT, CreateFontW, DT_CALCRECT, DT_EDITCONTROL,
+            DT_END_ELLIPSIS, DT_NOPREFIX, DT_WORDBREAK, DeleteObject, DrawTextW, EndPaint,
+            FW_NORMAL, FillRect, GetDC, GetMonitorInfoW, GetSysColor, GetSysColorBrush, HDC,
+            MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow, PAINTSTRUCT, ReleaseDC,
+            SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
-                CreateWindowExW, DI_NORMAL, DefWindowProcW, DestroyIcon, DestroyWindow,
-                DispatchMessageW, DrawIconEx, GetClientRect, GetForegroundWindow, GetMessageW,
-                GetWindowTextW, HWND_TOPMOST, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW, MSG,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+                GetForegroundWindow, GetMessageW, GetWindowTextW, HWND_TOPMOST, MSG,
                 PostQuitMessage, RegisterClassW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetTimer,
                 SetWindowPos, WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_TIMER, WNDCLASSW, WS_BORDER,
                 WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
@@ -29,8 +28,10 @@ use windows_sys::{
 };
 
 const CLASS_NAME: PCWSTR = w!("BossSensor.Notification");
-const APP_ICON_RESOURCE: usize = 1;
 const DISPLAY_TIME_MS: u32 = 3500;
+const TEXT_FLAGS: u32 = DT_NOPREFIX | DT_WORDBREAK | DT_EDITCONTROL;
+const HORIZONTAL_PADDING: i32 = 16;
+const VERTICAL_PADDING: i32 = 11;
 
 /// Display a brief alert in the current monitor's work area without activating it.
 pub fn notify(message: &str) -> Result<(), String> {
@@ -107,8 +108,9 @@ fn show_popup(message: &[u16]) -> io::Result<()> {
             return Err(io::Error::last_os_error());
         }
         let dpi = GetDpiForWindow(window).max(96);
-        let width = scale(344, dpi).min(work_area.right - work_area.left);
-        let height = scale(72, dpi).min(work_area.bottom - work_area.top);
+        let max_width = scale(368, dpi).min(work_area.right - work_area.left);
+        let (width, height) = measure_popup(window, message, dpi, max_width);
+        let height = height.min(work_area.bottom - work_area.top);
         let margin = scale(16, dpi);
         let left = (work_area.right - width - margin).max(work_area.left);
         let top = (work_area.bottom - height - margin).max(work_area.top);
@@ -137,6 +139,38 @@ fn show_popup(message: &[u16]) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn measure_popup(window: HWND, message: &[u16], dpi: u32, max_width: i32) -> (i32, i32) {
+    // Allow for the popup's non-client border in addition to the text padding.
+    let frame = scale(4, dpi);
+    let horizontal_inset = 2 * scale(HORIZONTAL_PADDING, dpi) + frame;
+    let vertical_inset = 2 * scale(VERTICAL_PADDING, dpi) + frame;
+    let mut bounds = RECT {
+        right: (max_width - horizontal_inset).max(1),
+        ..Default::default()
+    };
+    // SAFETY: The hidden popup is owned by this thread, and message is null-terminated.
+    unsafe {
+        let dc = GetDC(window);
+        if !dc.is_null() {
+            with_text_font(dc, dpi, || {
+                DrawTextW(
+                    dc,
+                    message.as_ptr(),
+                    -1,
+                    &mut bounds,
+                    TEXT_FLAGS | DT_CALCRECT,
+                );
+            });
+            ReleaseDC(window, dc);
+        }
+    }
+    let width = (bounds.right + horizontal_inset).max(scale(148, dpi));
+    (
+        width.min(max_width),
+        bounds.bottom.max(scale(21, dpi)) + vertical_inset,
+    )
 }
 
 fn register_class(instance: HINSTANCE) -> io::Result<()> {
@@ -202,90 +236,40 @@ fn paint(window: HWND) {
         SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
         SetBkMode(dc, TRANSPARENT as i32);
         let dpi = GetDpiForWindow(window).max(96);
-        let left = scale(16, dpi);
-        let right = rect.right - left;
-        let icon_size = scale(24, dpi);
-        let icon_top = (rect.bottom - icon_size) / 2;
-        let text_left = if draw_app_icon(dc, left, icon_top, icon_size) {
-            left + icon_size + scale(12, dpi)
-        } else {
-            left
+        let x = scale(HORIZONTAL_PADDING, dpi);
+        let y = scale(VERTICAL_PADDING, dpi);
+        let mut bounds = RECT {
+            left: x,
+            top: y,
+            right: rect.right - x,
+            bottom: rect.bottom - y,
         };
-        let block_top = (rect.bottom - scale(42, dpi)) / 2;
-        draw_line(
-            dc,
-            w!("fishing"),
-            RECT {
-                left: text_left,
-                top: block_top,
-                right,
-                bottom: block_top + scale(20, dpi),
-            },
-            scale(15, dpi),
-            FW_SEMIBOLD as i32,
-        );
-        GetWindowTextW(window, message.as_mut_ptr(), message.len() as i32);
-        draw_line(
-            dc,
-            message.as_ptr(),
-            RECT {
-                left: text_left,
-                top: block_top + scale(22, dpi),
-                right,
-                bottom: block_top + scale(42, dpi),
-            },
-            scale(16, dpi),
-            FW_NORMAL as i32,
-        );
+        let length = GetWindowTextW(window, message.as_mut_ptr(), message.len() as i32);
+        if length > 0 {
+            with_text_font(dc, dpi, || {
+                DrawTextW(
+                    dc,
+                    message.as_ptr(),
+                    length,
+                    &mut bounds,
+                    TEXT_FLAGS | DT_END_ELLIPSIS,
+                );
+            });
+        }
         EndPaint(window, &paint);
     }
 }
 
-fn draw_app_icon(dc: HDC, left: i32, top: i32, size: i32) -> bool {
-    // SAFETY: A resource name with a zero high word identifies an integer
-    // resource. The paint DC is valid for the call and the loaded icon is owned.
-    unsafe {
-        let instance = GetModuleHandleW(ptr::null());
-        if instance.is_null() {
-            return false;
-        }
-        let icon = LoadImageW(
-            instance,
-            ptr::without_provenance(APP_ICON_RESOURCE),
-            IMAGE_ICON,
-            size,
-            size,
-            LR_DEFAULTCOLOR,
-        );
-        if icon.is_null() {
-            return false;
-        }
-        let painted = DrawIconEx(
-            dc,
-            left,
-            top,
-            icon,
-            size,
-            size,
-            0,
-            ptr::null_mut(),
-            DI_NORMAL,
-        );
-        DestroyIcon(icon);
-        painted != 0
-    }
-}
-
-fn draw_line(dc: HDC, text: PCWSTR, mut bounds: RECT, size: i32, weight: i32) {
-    // SAFETY: The paint DC and zero-terminated text are valid for the call.
-    // The selected font is restored before the temporary font is destroyed.
+fn with_text_font(dc: HDC, dpi: u32, operation: impl FnOnce()) {
+    // SAFETY: The caller holds the DC for the duration of the operation.
+    // The original font is restored before disposing of the temporary font.
     unsafe {
         let font = CreateFontW(
-            -size,
+            -scale(16, dpi),
             0,
             0,
             0,
-            weight,
+            FW_NORMAL as i32,
             0,
             0,
             0,
@@ -301,13 +285,7 @@ fn draw_line(dc: HDC, text: PCWSTR, mut bounds: RECT, size: i32, weight: i32) {
         } else {
             SelectObject(dc, font)
         };
-        DrawTextW(
-            dc,
-            text,
-            -1,
-            &mut bounds,
-            DT_NOPREFIX | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
-        );
+        operation();
         if !old_font.is_null() {
             SelectObject(dc, old_font);
         }

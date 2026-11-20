@@ -7,6 +7,7 @@ use boss_sensor_vision::{EMBEDDING_LEN, EMBEDDING_MODEL};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA_VERSION: u32 = 1;
+pub const DEFAULT_NOTIFICATION_TEXT: &str = "留意一下";
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -14,9 +15,12 @@ pub struct Settings {
     version: u32,
     pub camera_id: Option<String>,
     pub preview: bool,
-    pub second_face: bool,
+    #[serde(alias = "second_face")]
+    pub face_count_enabled: bool,
+    pub minimum_faces: u32,
     pub recognize: bool,
     pub notify: bool,
+    pub notification_text: String,
     pub switch_window: bool,
     pub target: Option<WindowTarget>,
     pub people: Vec<Person>,
@@ -28,13 +32,28 @@ impl Default for Settings {
             version: SCHEMA_VERSION,
             camera_id: None,
             preview: true,
-            second_face: false,
+            face_count_enabled: false,
+            minimum_faces: 2,
             recognize: false,
             notify: true,
+            notification_text: DEFAULT_NOTIFICATION_TEXT.into(),
             switch_window: false,
             target: None,
             people: Vec::new(),
         }
+    }
+}
+
+impl Settings {
+    pub fn notification_message(&self) -> Option<&str> {
+        self.notify.then(|| {
+            let text = self.notification_text.trim();
+            if text.is_empty() {
+                DEFAULT_NOTIFICATION_TEXT
+            } else {
+                text
+            }
+        })
     }
 }
 
@@ -94,11 +113,12 @@ impl Storage {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Settings::default()),
             Err(error) => return Err(error.to_string()),
         };
-        let settings: Settings =
+        let mut settings: Settings =
             serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
         if settings.version != SCHEMA_VERSION {
             return Err(format!("此版本无法读取版本 {} 的设置", settings.version));
         }
+        settings.minimum_faces = settings.minimum_faces.max(1);
         Ok(settings)
     }
 
@@ -111,5 +131,38 @@ impl Storage {
             file.sync_all().map_err(|error| error.to_string())?;
         }
         fs::rename(temp, &self.path).map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_count_rule_keeps_its_threshold_and_gets_a_discreet_message() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"version":1,"second_face":true}"#).unwrap();
+        assert!(settings.face_count_enabled);
+        assert_eq!(settings.minimum_faces, 2);
+        assert_eq!(
+            settings.notification_message(),
+            Some(DEFAULT_NOTIFICATION_TEXT)
+        );
+    }
+
+    #[test]
+    fn notification_text_handles_custom_blank_and_disabled_values() {
+        let mut settings = Settings {
+            notification_text: "  喝水时间  ".into(),
+            ..Settings::default()
+        };
+        assert_eq!(settings.notification_message(), Some("喝水时间"));
+        settings.notification_text.clear();
+        assert_eq!(
+            settings.notification_message(),
+            Some(DEFAULT_NOTIFICATION_TEXT)
+        );
+        settings.notify = false;
+        assert_eq!(settings.notification_message(), None);
     }
 }

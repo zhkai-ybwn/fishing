@@ -4,11 +4,13 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use boss_sensor_platform::{self as platform, CameraInfo, WindowInfo, WindowTarget};
+use boss_sensor_platform::{
+    self as platform, CameraInfo, WindowActivation, WindowInfo, WindowTarget,
+};
 use eframe::egui::{self, Align, ColorImage, Context, Layout, RichText, TextureHandle, Ui, Vec2};
 
 use crate::engine::{Engine, Job, Policy, Snapshot};
-use crate::settings::{Person, Settings, Storage};
+use crate::settings::{DEFAULT_NOTIFICATION_TEXT, Person, Settings, Storage};
 use crate::{brand, ui as design};
 
 const STALE_FRAME: Duration = Duration::from_secs(2);
@@ -117,7 +119,10 @@ impl Fishing {
         let importing = matches!(self.enrollment, Some(Enrollment::Photo { .. }));
         let policy = if self.running && self.enrollment.is_none() {
             Policy {
-                second_face: self.settings.second_face,
+                minimum_faces: self
+                    .settings
+                    .face_count_enabled
+                    .then_some(self.settings.minimum_faces),
                 templates: if self.settings.recognize {
                     self.settings
                         .people
@@ -128,7 +133,7 @@ impl Fishing {
                 } else {
                     Vec::new()
                 },
-                notify: self.settings.notify,
+                notification_text: self.settings.notification_message().map(str::to_owned),
                 target: self
                     .settings
                     .target
@@ -139,7 +144,7 @@ impl Fishing {
             Policy::default()
         };
         let identify = recording || !policy.templates.is_empty();
-        let analyze = identify || policy.second_face;
+        let analyze = identify || policy.minimum_faces.is_some();
         let preview = self.settings.preview && self.running && !importing;
         let job = (preview || analyze).then(|| Job {
             camera: self.settings.camera_id.clone().unwrap_or_default(),
@@ -152,7 +157,6 @@ impl Fishing {
                 engine.configure(job.clone());
             }
             self.job = job;
-            self.texture = None;
         }
     }
 
@@ -162,7 +166,10 @@ impl Fishing {
         {
             self.last_event = Some(event.at);
             let switch_detail = match &event.switched {
-                Some(Ok(())) => " · 已切到目标窗口".into(),
+                Some(Ok(WindowActivation::Foreground)) => " · 已切到目标窗口".into(),
+                Some(Ok(WindowActivation::Raised)) => {
+                    " · 目标窗口已浮到前面，键盘焦点留在原窗口".into()
+                }
                 Some(Err(error)) => format!(" · 切屏失败，{error}"),
                 None => String::new(),
             };
@@ -302,9 +309,21 @@ impl Fishing {
     }
 
     fn rule_section(&mut self, ui: &mut Ui) {
-        design::switch(ui, &mut self.settings.second_face, "画面中出现第二张脸");
-        if self.settings.second_face {
-            ui.weak("保持你的脸在摄像头画面中。");
+        design::switch(ui, &mut self.settings.face_count_enabled, "按人脸数量触发");
+        if self.settings.face_count_enabled {
+            ui.indent("minimum-faces", |ui| {
+                ui.horizontal(|ui| {
+                    let label = ui.label("检测到至少");
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.minimum_faces)
+                            .range(1..=u32::MAX)
+                            .update_while_editing(false),
+                    )
+                    .labelled_by(label.id);
+                    ui.label("张脸时触发");
+                });
+                ui.weak("按摄像头画面中的总人脸数计算。");
+            });
         }
         ui.separator();
         design::switch(ui, &mut self.settings.recognize, "识别指定人员");
@@ -380,6 +399,18 @@ impl Fishing {
 
     fn action_section(&mut self, ui: &mut Ui) {
         design::switch(ui, &mut self.settings.notify, "显示桌面提示");
+        if self.settings.notify {
+            ui.indent("notification-text", |ui| {
+                let label = ui.label("提示文字");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.notification_text)
+                        .hint_text(DEFAULT_NOTIFICATION_TEXT)
+                        .char_limit(80)
+                        .desired_width(ui.available_width().min(300.0)),
+                )
+                .labelled_by(label.id);
+            });
+        }
         ui.separator();
         if design::switch(ui, &mut self.settings.switch_window, "切到目标应用").changed()
             && self.settings.switch_window

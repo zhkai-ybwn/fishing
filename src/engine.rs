@@ -2,7 +2,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use boss_sensor_platform::{self as platform, Camera, Frame, WindowTarget};
+use boss_sensor_platform::{self as platform, Camera, Frame, WindowActivation, WindowTarget};
 use boss_sensor_vision::{Observation, Vision};
 
 use crate::rules::{self, Matches, Rules};
@@ -19,11 +19,21 @@ pub struct Job {
     pub policy: Policy,
 }
 
+impl Job {
+    fn same_rules(&self, other: &Self) -> bool {
+        self.camera == other.camera
+            && self.analyze == other.analyze
+            && self.identify == other.identify
+            && self.policy.minimum_faces == other.policy.minimum_faces
+            && self.policy.templates == other.policy.templates
+    }
+}
+
 #[derive(Clone, Default, PartialEq)]
 pub struct Policy {
-    pub second_face: bool,
+    pub minimum_faces: Option<u32>,
     pub templates: Vec<Vec<f32>>,
-    pub notify: bool,
+    pub notification_text: Option<String>,
     pub target: Option<WindowTarget>,
 }
 
@@ -42,7 +52,7 @@ pub struct Event {
     pub matched: Matches,
     pub at: Instant,
     pub notification: Option<Result<(), String>>,
-    pub switched: Option<Result<(), String>>,
+    pub switched: Option<Result<WindowActivation, String>>,
 }
 
 #[derive(Clone, Default)]
@@ -58,6 +68,7 @@ pub struct Snapshot {
 struct State {
     job: Option<Job>,
     generation: u64,
+    rule_generation: u64,
     snapshot: Snapshot,
     stopped: bool,
 }
@@ -87,9 +98,14 @@ impl Engine {
     pub fn configure(&self, job: Option<Job>) {
         let mut state = self.0.state.lock().unwrap();
         if state.job != job {
+            // Action edits invalidate pending actions without rearming a face already in view.
+            if !matches!((&state.job, &job), (Some(previous), Some(next)) if previous.same_rules(next))
+            {
+                state.rule_generation += 1;
+                state.snapshot = Snapshot::default();
+            }
             state.job = job;
             state.generation += 1;
-            state.snapshot = Snapshot::default();
             self.0.changed.notify_all();
         }
     }
@@ -182,11 +198,11 @@ fn vision_loop(shared: &Shared) {
     let mut last_sequence = 0;
     let mut next_analysis = Instant::now();
     let mut rules = Rules::default();
-    let mut last_generation = None;
+    let mut last_rule_generation = None;
     let mut last_reading = None;
 
     loop {
-        let (generation, job, image) = {
+        let (generation, rule_generation, job, image) = {
             let mut state = shared.state.lock().unwrap();
             loop {
                 if state.stopped {
@@ -198,7 +214,12 @@ fn vision_loop(shared: &Shared) {
                 {
                     let delay = next_analysis.saturating_duration_since(Instant::now());
                     if delay.is_zero() {
-                        break (state.generation, job.clone(), Arc::clone(image));
+                        break (
+                            state.generation,
+                            state.rule_generation,
+                            job.clone(),
+                            Arc::clone(image),
+                        );
                     }
                     let (next_state, _) = shared.changed.wait_timeout(state, delay).unwrap();
                     state = next_state;
@@ -227,18 +248,18 @@ fn vision_loop(shared: &Shared) {
             if state.generation == generation && state.snapshot.camera_error.is_none() {
                 match analyzed {
                     Ok(observation) => {
-                        if last_generation != Some(generation)
+                        if last_rule_generation != Some(rule_generation)
                             || last_reading.is_some_and(|previous| {
                                 image.at.duration_since(previous) > Duration::from_secs(2)
                             })
                         {
                             rules = Rules::default();
                         }
-                        last_generation = Some(generation);
+                        last_rule_generation = Some(rule_generation);
                         last_reading = Some(image.at);
                         let matched = rules.observe(rules::classify(
                             &observation,
-                            job.policy.second_face,
+                            job.policy.minimum_faces,
                             job.policy.templates.iter().map(Vec::as_slice),
                         ));
                         state.snapshot.reading = Some(Arc::new(Reading {
@@ -254,9 +275,12 @@ fn vision_loop(shared: &Shared) {
                                 .as_ref()
                                 .filter(|_| job_is_current(shared, generation))
                                 .map(platform::activate);
-                            let notification = (job.policy.notify
-                                && job_is_current(shared, generation))
-                            .then(|| platform::notify(matched.label()));
+                            let notification = job
+                                .policy
+                                .notification_text
+                                .as_deref()
+                                .filter(|_| job_is_current(shared, generation))
+                                .map(platform::notify);
                             let mut state = shared.state.lock().unwrap();
                             if state.generation == generation {
                                 state.snapshot.event = Some(Arc::new(Event {
@@ -289,4 +313,39 @@ fn vision_loop(shared: &Shared) {
 fn job_is_current(shared: &Shared, generation: u64) -> bool {
     let state = shared.state.lock().unwrap();
     state.generation == generation && !state.stopped && state.snapshot.camera_error.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changing_notification_text_does_not_rearm_detection() {
+        let engine = Engine(Arc::default());
+        let mut job = Job {
+            camera: String::new(),
+            analyze: true,
+            identify: false,
+            policy: Policy {
+                minimum_faces: Some(2),
+                ..Policy::default()
+            },
+        };
+        engine.configure(Some(job.clone()));
+        let first_generation = engine.0.state.lock().unwrap().rule_generation;
+
+        job.policy.notification_text = Some("喝水时间".into());
+        engine.configure(Some(job.clone()));
+        assert_eq!(
+            engine.0.state.lock().unwrap().rule_generation,
+            first_generation
+        );
+
+        job.policy.minimum_faces = Some(3);
+        engine.configure(Some(job));
+        assert_ne!(
+            engine.0.state.lock().unwrap().rule_generation,
+            first_generation
+        );
+    }
 }

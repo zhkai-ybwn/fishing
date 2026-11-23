@@ -6,6 +6,8 @@ mod engine;
 mod rules;
 mod settings;
 mod ui;
+mod update_ui;
+mod window_close;
 
 use eframe::egui;
 
@@ -23,7 +25,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(brand::window_icon())
-            .with_inner_size([548.0, 624.0])
+            .with_inner_size([832.0, 472.0])
             .with_min_inner_size([416.0, 440.0]),
         ..Default::default()
     };

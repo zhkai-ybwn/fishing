@@ -48,6 +48,7 @@ function Invoke-WixBuild([string[]]$Arguments) {
 
 $root = Split-Path -Parent $PSScriptRoot
 $iconPath = (Resolve-Path -LiteralPath (Join-Path $root 'assets/fishing.ico')).Path
+$logoPath = (Resolve-Path -LiteralPath (Join-Path $root 'assets/fishing.png')).Path
 $runtime = & (Join-Path $PSScriptRoot 'Get-OnnxRuntime.ps1')
 $redist = Find-VcRedistDirectory
 $output = (New-Item -ItemType Directory -Force -Path $OutputDirectory).FullName
@@ -55,6 +56,9 @@ $scratchRoot = (New-Item -ItemType Directory -Force -Path (Join-Path $root 'targ
 $scratch = (New-Item -ItemType Directory -Path (Join-Path $scratchRoot ([Guid]::NewGuid().ToString()))).FullName
 
 try {
+    $brandDirectory = (New-Item -ItemType Directory -Path (Join-Path $scratch 'brand')).FullName
+    & (Join-Path $PSScriptRoot 'Write-InstallerBrand.ps1') -Logo $logoPath `
+        -License (Join-Path $root 'LICENSE') -OutputDirectory $brandDirectory
     $payload = (New-Item -ItemType Directory -Path (Join-Path $scratch 'payload')).FullName
     Copy-Item -LiteralPath (Join-Path $BuildDirectory 'fishing.exe') -Destination $payload
     Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $payload 'fishing-LICENSE.txt')
@@ -87,14 +91,17 @@ try {
     $exe = Join-Path $scratch "$baseName-setup.exe"
 
     Invoke-WixBuild @('build', '-arch', 'x64', '-pdbtype', 'none',
+        '-ext', 'WixToolset.UI.wixext', '-culture', 'zh-CN',
         '-d', "Version=$Version", '-d', "PayloadDirectory=$payload", '-d', "IncludeNotices=$includeNotices",
-        '-d', "IconPath=$iconPath",
+        '-d', "IconPath=$iconPath", '-d', "BrandDirectory=$brandDirectory",
         '-out', $msi, (Join-Path $PSScriptRoot 'Package.wxs'))
     # ICE91 compares user directories with a machine-wide install. This package is per-user.
     Invoke-WixBuild @('msi', 'validate', '-sice', 'ICE91', $msi)
     Invoke-WixBuild @('build', '-arch', 'x64', '-pdbtype', 'none',
         '-ext', 'WixToolset.BootstrapperApplications.wixext',
         '-d', "Version=$Version", '-d', "MsiPath=$msi", '-d', "IconPath=$iconPath",
+        '-d', "LogoPath=$logoPath", '-d', ('ThemePath=' + (Join-Path $PSScriptRoot 'InstallerTheme.xml')),
+        '-d', ('LocalizationPath=' + (Join-Path $PSScriptRoot 'InstallerStrings.wxl')),
         '-out', $exe, (Join-Path $PSScriptRoot 'Bundle.wxs'))
 
     $embedded = Join-Path $scratch 'embedded'

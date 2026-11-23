@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Theme xmlns="http://wixtoolset.org/schemas/v4/thmutil">
+  <Font Id="0" Height="-14" Weight="400" Foreground="windowtext" Background="window">Segoe UI</Font>
+  <Font Id="1" Height="-30" Weight="700" Foreground="windowtext">Segoe UI</Font>
+  <Font Id="2" Height="-21" Weight="600" Foreground="windowtext">Segoe UI</Font>
+  <Font Id="3" Height="-13" Weight="400" Foreground="graytext">Segoe UI</Font>
+
+  <Window Width="500" Height="310" HexStyle="100a0000" FontId="0" Caption="fishing 安装程序">
+    <ImageControl X="22" Y="20" Width="72" Height="72" ImageFile="logo.png" Visible="yes" />
+    <Label X="108" Y="20" Width="-22" Height="40" FontId="1" Visible="yes">fishing</Label>
+    <Label X="109" Y="63" Width="-22" Height="22" FontId="3" Visible="yes">Windows 桌面摸鱼助手</Label>
+
+    <Page Name="Help">
+      <Label X="24" Y="112" Width="-24" Height="32" FontId="2">安装命令</Label>
+      <Label X="24" Y="158" Width="-24" Height="72" FontId="0" DisablePrefix="yes">/install 安装，/repair 修复，/uninstall 卸载。&#xA;/quiet 静默运行，/norestart 禁止自动重启。&#xA;/log 路径 保存安装日志。</Label>
+      <Button Name="HelpCloseButton" X="-22" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">
+        <Text>关闭</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Loading">
+      <Label X="24" Y="129" Width="-24" Height="32" FontId="2">正在准备安装…</Label>
+    </Page>
+
+    <Page Name="Install">
+      <Label X="24" Y="111" Width="-24" Height="32" FontId="2">安装到当前用户</Label>
+      <Label X="24" Y="154" Width="-24" Height="27" FontId="0">安装完成后，可从 Windows 开始菜单打开 fishing。</Label>
+      <Checkbox Name="DesktopShortcut" X="23" Y="194" Width="-24" Height="25" TabStop="yes" FontId="0">创建桌面快捷方式</Checkbox>
+      <Label X="24" Y="-23" Width="180" Height="24" FontId="3">[WixBundleVersion] · Windows x64</Label>
+      <Button Name="InstallButton" X="-129" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">安装</Button>
+      <Button Name="InstallCancelButton" X="-22" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">
+        <Text>取消</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Progress">
+      <Label X="24" Y="112" Width="-24" Height="32" FontId="2">
+        <Text>正在安装…</Text>
+        <Text Condition="WixBundleAction = 4">正在卸载…</Text>
+        <Text Condition="WixBundleAction = 8">正在修复…</Text>
+      </Label>
+      <Label Name="OverallProgressPackageText" X="24" Y="157" Width="-24" Height="24" FontId="0" DisablePrefix="yes" />
+      <Progressbar Name="OverallCalculatedProgressbar" X="24" Y="192" Width="-24" Height="9" />
+      <Button Name="ProgressCancelButton" X="-22" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">取消</Button>
+    </Page>
+
+    <Page Name="Modify">
+      <Label X="24" Y="112" Width="-24" Height="32" FontId="2">管理已安装的 fishing</Label>
+      <Label X="24" Y="154" Width="-24" Height="27" FontId="0">可以修复安装或从当前用户移除应用。</Label>
+      <Button Name="RepairButton" X="-236" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0" HideWhenDisabled="yes">修复</Button>
+      <Button Name="UninstallButton" X="-129" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">卸载</Button>
+      <Button Name="ModifyCancelButton" X="-22" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">
+        <Text>取消</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Success">
+      <Label X="24" Y="112" Width="-24" Height="32" FontId="2">
+        <Text>已完成</Text>
+        <Text Condition="WixBundleAction = 4">卸载完成</Text>
+        <Text Condition="WixBundleAction = 6">安装完成</Text>
+        <Text Condition="WixBundleAction = 8">修复完成</Text>
+      </Label>
+      <Label X="24" Y="155" Width="-24" Height="27" FontId="0" VisibleCondition="WixBundleAction = 6">从 Windows 开始菜单即可打开 fishing。</Label>
+      <Label X="24" Y="199" Width="-24" Height="25" FontId="3" VisibleCondition="WixStdBARestartRequired">需要重新启动 Windows 才能完成变更。</Label>
+      <Button Name="SuccessRestartButton" X="-129" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0" HideWhenDisabled="yes">重新启动</Button>
+      <Button Name="SuccessCloseButton" X="-22" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">
+        <Text>完成</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Failure">
+      <Label X="24" Y="112" Width="-24" Height="32" FontId="2">未能完成</Label>
+      <Hypertext Name="FailureLogFileLink" X="24" Y="151" Width="-24" Height="25" FontId="0" TabStop="yes" HideWhenDisabled="yes">查看 &lt;a href=&quot;#&quot;&gt;安装日志&lt;/a&gt;。</Hypertext>
+      <Hypertext Name="FailureMessageText" X="24" Y="183" Width="-24" Height="55" FontId="0" TabStop="yes" HideWhenDisabled="yes" />
+      <Button Name="FailureRestartButton" X="-129" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0" HideWhenDisabled="yes">重新启动</Button>
+      <Button Name="FailureCloseButton" X="-22" Y="-20" Width="96" Height="30" TabStop="yes" FontId="0">
+        <Text>关闭</Text>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+  </Window>
+</Theme>

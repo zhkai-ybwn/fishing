@@ -7,15 +7,22 @@ use boss_sensor_platform::WindowTarget;
 use boss_sensor_vision::{EMBEDDING_LEN, EMBEDDING_MODEL};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA_VERSION: u32 = 1;
+use crate::window_close::CloseBehavior;
+
+const SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_NOTIFICATION_TEXT: &str = "已专注{时长}，起身走走，休息一下吧。";
+pub const DEFAULT_PREVIEW_BRIGHTNESS: u16 = 100;
+pub const PREVIEW_BRIGHTNESS_RANGE: std::ops::RangeInclusive<u16> = 25..=175;
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default = "legacy_schema_version")]
     version: u32,
     pub camera_id: Option<String>,
     pub preview: bool,
+    pub preview_frameless: bool,
+    pub preview_brightness: u16,
     #[serde(alias = "second_face")]
     pub face_count_enabled: bool,
     pub minimum_faces: u32,
@@ -25,6 +32,7 @@ pub struct Settings {
     pub switch_window: bool,
     pub target: Option<WindowTarget>,
     pub people: Vec<Person>,
+    pub close_behavior: CloseBehavior,
 }
 
 impl Default for Settings {
@@ -33,6 +41,8 @@ impl Default for Settings {
             version: SCHEMA_VERSION,
             camera_id: None,
             preview: true,
+            preview_frameless: true,
+            preview_brightness: DEFAULT_PREVIEW_BRIGHTNESS,
             face_count_enabled: false,
             minimum_faces: 2,
             recognize: false,
@@ -41,21 +51,51 @@ impl Default for Settings {
             switch_window: false,
             target: None,
             people: Vec::new(),
+            close_behavior: CloseBehavior::default(),
         }
     }
 }
 
 impl Settings {
     pub fn notification_message(&self) -> Option<&str> {
-        self.notify.then(|| {
-            let text = self.notification_text.trim();
-            if text.is_empty() {
-                DEFAULT_NOTIFICATION_TEXT
-            } else {
-                text
-            }
-        })
+        self.notify.then(|| self.notification_template())
     }
+
+    pub fn notification_template(&self) -> &str {
+        let text = self.notification_text.trim();
+        if text.is_empty() {
+            DEFAULT_NOTIFICATION_TEXT
+        } else {
+            text
+        }
+    }
+}
+
+fn legacy_schema_version() -> u32 {
+    1
+}
+
+fn decode_settings(bytes: &[u8]) -> Result<Settings, String> {
+    let mut settings: Settings =
+        serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    match settings.version {
+        1 => {
+            // The previous version serialized Exit even when it was never chosen.
+            // Keep other v1 choices and persist v2 the next time settings are saved.
+            if settings.close_behavior == CloseBehavior::Exit {
+                settings.close_behavior = CloseBehavior::Ask;
+            }
+            settings.version = SCHEMA_VERSION;
+        }
+        SCHEMA_VERSION => {}
+        version => return Err(format!("此版本无法读取版本 {version} 的设置")),
+    }
+    settings.minimum_faces = settings.minimum_faces.max(1);
+    settings.preview_brightness = settings.preview_brightness.clamp(
+        *PREVIEW_BRIGHTNESS_RANGE.start(),
+        *PREVIEW_BRIGHTNESS_RANGE.end(),
+    );
+    Ok(settings)
 }
 
 pub fn render_reminder(template: &str, elapsed: Duration) -> String {
@@ -128,13 +168,11 @@ impl Storage {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Settings::default()),
             Err(error) => return Err(error.to_string()),
         };
-        let mut settings: Settings =
-            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-        if settings.version != SCHEMA_VERSION {
-            return Err(format!("此版本无法读取版本 {} 的设置", settings.version));
-        }
-        settings.minimum_faces = settings.minimum_faces.max(1);
-        Ok(settings)
+        decode_settings(&bytes)
+    }
+
+    pub fn updates_directory(&self) -> PathBuf {
+        self.path.with_file_name("updates")
     }
 
     pub fn save(&self, settings: &Settings) -> Result<(), String> {
@@ -163,6 +201,43 @@ mod tests {
             settings.notification_message(),
             Some(DEFAULT_NOTIFICATION_TEXT)
         );
+    }
+
+    #[test]
+    fn old_settings_get_frameless_preview_and_ask_defaults() {
+        let settings = decode_settings(br#"{"version":1,"preview":false}"#).unwrap();
+        assert!(!settings.preview);
+        assert!(settings.preview_frameless);
+        assert_eq!(settings.preview_brightness, DEFAULT_PREVIEW_BRIGHTNESS);
+        assert_eq!(settings.close_behavior, CloseBehavior::Ask);
+    }
+
+    #[test]
+    fn old_serialized_exit_defaults_migrate_to_ask_without_changing_detection() {
+        for bytes in [
+            br#"{"version":1,"close_behavior":"exit","minimum_faces":3}"#.as_slice(),
+            br#"{"close_behavior":"exit","minimum_faces":3}"#.as_slice(),
+        ] {
+            let settings = decode_settings(bytes).unwrap();
+            assert_eq!(settings.close_behavior, CloseBehavior::Ask);
+            assert_eq!(settings.minimum_faces, 3);
+            assert_eq!(settings.version, SCHEMA_VERSION);
+        }
+        let prior_to_tray =
+            decode_settings(br#"{"version":1,"close_behavior":"to_tray"}"#).unwrap();
+        assert_eq!(prior_to_tray.close_behavior, CloseBehavior::ToTray);
+    }
+
+    #[test]
+    fn future_explicit_exit_choice_is_preserved_after_save() {
+        let settings = Settings {
+            close_behavior: CloseBehavior::Exit,
+            ..Settings::default()
+        };
+        let bytes = serde_json::to_vec(&settings).unwrap();
+        let loaded = decode_settings(&bytes).unwrap();
+        assert_eq!(loaded.close_behavior, CloseBehavior::Exit);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
     }
 
     #[test]

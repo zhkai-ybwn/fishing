@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="zh-CN" Language="2052">
+  <String Id="ConfirmCancelMessage" Value="要取消当前操作吗？" />
+  <String Id="ExecuteUpgradeRelatedBundleMessage" Value="正在处理旧版 fishing" />
+  <String Id="PauseAutomaticUpdatesMessage" Value="正在准备 Windows 安装服务…" />
+  <String Id="SystemRestorePointMessage" Value="正在创建系统还原点…" />
+  <String Id="FilesInUseTitle" Value="安装文件正在使用" />
+  <String Id="FilesInUseLabel" Value="请关闭下列应用后继续。" />
+  <String Id="FilesInUseCloseRadioButton" Value="关闭应用，完成后尝试重新打开。" />
+  <String Id="FilesInUseDontCloseRadioButton" Value="保留打开的应用，稍后重新启动 Windows。" />
+  <String Id="FilesInUseRetryButton" Value="重试" />
+  <String Id="FilesInUseIgnoreButton" Value="忽略" />
+  <String Id="FilesInUseExitButton" Value="退出" />
+  <String Id="FilesInUseNetfxCloseRadioButton" Value="关闭应用。" />
+</WixLocalization>

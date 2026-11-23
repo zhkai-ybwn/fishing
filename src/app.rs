@@ -10,7 +10,12 @@ use eframe::egui::{self, Align, ColorImage, Context, Layout, RichText, TextureHa
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::engine::{Engine, Job, Policy, Reminder, Snapshot};
-use crate::settings::{DEFAULT_NOTIFICATION_TEXT, Person, Settings, Storage, render_reminder};
+use crate::settings::{
+    DEFAULT_NOTIFICATION_TEXT, DEFAULT_PREVIEW_BRIGHTNESS, PREVIEW_BRIGHTNESS_RANGE, Person,
+    Settings, Storage, render_reminder,
+};
+use crate::update_ui::Updater;
+use crate::window_close::{CloseBehavior, CloseDecision, ClosePrompt};
 use crate::{brand, ui as design};
 
 const STALE_FRAME: Duration = Duration::from_secs(2);
@@ -37,6 +42,9 @@ pub struct Fishing {
     tray: Option<Tray>,
     tray_error: Option<String>,
     in_tray: bool,
+    allow_exit: bool,
+    close_prompt: Option<ClosePrompt>,
+    updater: Updater,
     job: Option<Job>,
     cameras: Vec<CameraInfo>,
     camera_list_error: Option<String>,
@@ -49,9 +57,11 @@ pub struct Fishing {
     enrollment_label: Option<String>,
     texture: Option<TextureHandle>,
     texture_sequence: u64,
+    texture_brightness: u16,
     preview_position: Option<egui::Pos2>,
     preview_open: bool,
     logo: TextureHandle,
+    show_preferences: bool,
 }
 
 impl Fishing {
@@ -102,6 +112,9 @@ impl Fishing {
             tray,
             tray_error,
             in_tray: false,
+            allow_exit: false,
+            close_prompt: None,
+            updater: Updater::default(),
             job: None,
             cameras: Vec::new(),
             camera_list_error: None,
@@ -113,9 +126,11 @@ impl Fishing {
             enrollment_label: None,
             texture: None,
             texture_sequence: 0,
+            texture_brightness: DEFAULT_PREVIEW_BRIGHTNESS,
             preview_position: None,
             preview_open: false,
             logo: brand::texture(ctx),
+            show_preferences: false,
         };
         app.refresh_cameras();
         if app.settings.switch_window {
@@ -200,16 +215,79 @@ impl Fishing {
         }
     }
 
-    fn minimize_to_tray(&mut self, ctx: &Context) {
+    fn minimize_to_tray(&mut self, ctx: &Context) -> bool {
         if let Some(tray) = &self.tray {
             match tray.set_taskbar_visible(false) {
                 Ok(()) => {
                     self.in_tray = true;
                     self.tray_error = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    return true;
                 }
                 Err(error) => self.tray_error = Some(error),
             }
+        }
+        false
+    }
+
+    fn begin_exit(&mut self) {
+        self.allow_exit = true;
+        self.close_prompt = None;
+        if let Some(engine) = &self.engine {
+            engine.configure(None);
+        }
+    }
+
+    fn request_exit(&mut self, ctx: &Context) {
+        self.begin_exit();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn handle_close_request(&mut self, ctx: &Context) {
+        if self.allow_exit || !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+        if self.settings.close_behavior == CloseBehavior::Exit {
+            self.begin_exit();
+            return;
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if self.settings.close_behavior != CloseBehavior::ToTray || !self.minimize_to_tray(ctx) {
+            self.close_prompt.get_or_insert_with(ClosePrompt::default);
+        }
+    }
+
+    fn draw_close_prompt(&mut self, ctx: &Context) -> bool {
+        let decision = self.close_prompt.as_mut().and_then(|prompt| {
+            prompt.show(
+                ctx,
+                self.tray.is_some() && self.tray_error.is_none(),
+                self.save_enabled,
+            )
+        });
+        match decision {
+            Some(CloseDecision::Exit { remember }) => {
+                if remember {
+                    self.settings.close_behavior = CloseBehavior::Exit;
+                }
+                self.close_prompt = None;
+                true
+            }
+            Some(CloseDecision::ToTray { remember }) => {
+                if self.minimize_to_tray(ctx) {
+                    if remember {
+                        self.settings.close_behavior = CloseBehavior::ToTray;
+                    }
+                    self.close_prompt = None;
+                }
+                false
+            }
+            Some(CloseDecision::Cancel) => {
+                self.close_prompt = None;
+                false
+            }
+            None => false,
         }
     }
 
@@ -222,14 +300,14 @@ impl Fishing {
         self.in_tray = false;
     }
 
-    fn handle_tray_actions(&mut self, ctx: &Context) -> bool {
+    fn handle_tray_actions(&mut self, ctx: &Context) {
         while let Some(action) = self.tray.as_ref().and_then(Tray::next_action) {
             match action {
                 TrayAction::Open => self.restore_from_tray(),
                 TrayAction::Toggle => self.toggle_running(),
                 TrayAction::Quit => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    return false;
+                    self.request_exit(ctx);
+                    return;
                 }
             }
         }
@@ -240,7 +318,6 @@ impl Fishing {
         {
             self.restore_from_tray();
         }
-        true
     }
 
     fn observe(&mut self, snapshot: &Snapshot) {
@@ -352,14 +429,13 @@ impl Fishing {
     }
 
     fn camera_section(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
+        if design::picker_with_refresh(ui, |ui, picker_width| {
             let label = self.settings.camera_id.as_ref().map_or("默认摄像头", |id| {
                 self.cameras
                     .iter()
                     .find(|camera| camera.id == *id)
                     .map_or("所选摄像头不可用", |camera| camera.name.as_str())
             });
-            let picker_width = (ui.available_width() - 68.0).clamp(120.0, 380.0);
             egui::ComboBox::from_id_salt("camera-select")
                 .width(picker_width)
                 .truncate()
@@ -378,20 +454,39 @@ impl Fishing {
                 })
                 .response
                 .on_hover_text(label);
-            if ui.button("刷新").clicked() {
-                self.refresh_cameras();
-            }
-        });
+        }) {
+            self.refresh_cameras();
+        }
         if let Some(error) = &self.camera_list_error {
             ui.label(RichText::new(error).color(ui.visuals().warn_fg_color));
         } else if self.cameras.is_empty() {
             ui.weak("未发现摄像头。连接摄像头后刷新列表。");
         }
         ui.separator();
-        design::switch(ui, &mut self.settings.preview, "置顶实时预览");
+        design::switch(ui, &mut self.settings.preview_frameless, "无边框预览");
+        ui.horizontal(|ui| {
+            let label = ui.label("预览亮度");
+            ui.add(
+                egui::Slider::new(
+                    &mut self.settings.preview_brightness,
+                    PREVIEW_BRIGHTNESS_RANGE,
+                )
+                .suffix("%"),
+            )
+            .labelled_by(label.id);
+            if ui
+                .button("还原")
+                .on_hover_text("还原为摄像头的原始亮度")
+                .clicked()
+            {
+                self.settings.preview_brightness = DEFAULT_PREVIEW_BRIGHTNESS;
+            }
+        });
     }
 
     fn rule_section(&mut self, ui: &mut Ui) {
+        design::switch(ui, &mut self.settings.preview, "置顶实时预览");
+        ui.separator();
         design::switch(ui, &mut self.settings.face_count_enabled, "按人脸数量触发");
         if self.settings.face_count_enabled {
             ui.indent("minimum-faces", |ui| {
@@ -437,25 +532,35 @@ impl Fishing {
             });
         }
         ui.separator();
-        design::switch(ui, &mut self.settings.recognize, "识别指定人员");
-        if !self.settings.recognize {
+        if design::switch(ui, &mut self.settings.recognize, "识别指定人员").changed()
+            && !self.settings.recognize
+        {
             self.enrollment = None;
-            return;
         }
+        if self.settings.recognize && self.settings.people.is_empty() {
+            ui.indent("people-empty", |ui| {
+                if ui.small_button("录入人员…").clicked() {
+                    self.show_preferences = true;
+                }
+            });
+        }
+    }
 
-        ui.indent("enrollment", |ui| {
+    fn people_section(&mut self, ui: &mut Ui) {
+        ui.scope(|ui| {
             let mut remove = None;
             for (index, person) in self.settings.people.iter().enumerate() {
                 ui.push_id(index, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(&person.name);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("移除").clicked() {
+                            remove = Some(index);
+                        }
                         if person.embedding().is_none() {
                             ui.weak("需要重新录入");
                         }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("移除").clicked() {
-                                remove = Some(index);
-                            }
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.add(egui::Label::new(&person.name).truncate())
+                                .on_hover_text(&person.name);
                         });
                     });
                 });
@@ -510,37 +615,39 @@ impl Fishing {
 
     fn action_section(&mut self, ui: &mut Ui) {
         design::switch(ui, &mut self.settings.notify, "显示桌面提示");
-        if self.settings.notify {
-            ui.indent("notification-text", |ui| {
-                let label = ui.label("提示文字");
-                let width = ui.available_width();
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings.notification_text)
-                        .hint_text(DEFAULT_NOTIFICATION_TEXT)
-                        .char_limit(80)
-                        .desired_width(width.min(440.0)),
-                )
-                .labelled_by(label.id);
-                ui.weak("{时长} 会替换为自本次启动检测以来的时间。");
-                ui.horizontal(|ui| {
-                    if ui.button("恢复默认").clicked() {
-                        self.settings.notification_text = DEFAULT_NOTIFICATION_TEXT.into();
-                    }
-                    if ui.button("预览提醒").clicked()
-                        && let Some(template) = self.settings.notification_message()
-                    {
-                        let elapsed = self
-                            .running_since
-                            .map_or(Duration::ZERO, |started| started.elapsed());
-                        let message = render_reminder(template, elapsed);
-                        if let Err(error) = platform::notify(&message) {
-                            self.event_label = Some(error);
-                        }
-                    }
-                });
-            });
-        }
         ui.separator();
+        self.switch_target_section(ui);
+    }
+
+    fn notification_section(&mut self, ui: &mut Ui) {
+        let label = ui.label("提示文字");
+        let width = ui.available_width();
+        ui.add(
+            egui::TextEdit::singleline(&mut self.settings.notification_text)
+                .hint_text(DEFAULT_NOTIFICATION_TEXT)
+                .char_limit(80)
+                .desired_width(width.min(440.0)),
+        )
+        .labelled_by(label.id);
+        ui.weak("{时长} 会替换为自本次启动检测以来的时间。");
+        ui.horizontal(|ui| {
+            if ui.button("恢复默认").clicked() {
+                self.settings.notification_text = DEFAULT_NOTIFICATION_TEXT.into();
+            }
+            if ui.button("预览提醒").clicked() {
+                let template = self.settings.notification_template();
+                let elapsed = self
+                    .running_since
+                    .map_or(Duration::ZERO, |started| started.elapsed());
+                let message = render_reminder(template, elapsed);
+                if let Err(error) = platform::notify(&message) {
+                    self.event_label = Some(error);
+                }
+            }
+        });
+    }
+
+    fn switch_target_section(&mut self, ui: &mut Ui) {
         if design::switch(ui, &mut self.settings.switch_window, "切到目标应用").changed()
             && self.settings.switch_window
         {
@@ -549,61 +656,56 @@ impl Fishing {
         if !self.settings.switch_window {
             return;
         }
-        ui.indent("switch-target", |ui| {
-            ui.horizontal(|ui| {
-                let label = self
-                    .settings
-                    .target
-                    .as_ref()
-                    .map_or_else(|| "选择目标应用".into(), target_label);
-                let picker_width = (ui.available_width() - 68.0).clamp(120.0, 380.0);
-                egui::ComboBox::from_id_salt("target-app")
-                    .width(picker_width)
-                    .truncate()
-                    .selected_text(&label)
-                    .show_ui(ui, |ui| {
-                        ui.set_max_width(picker_width);
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                        ui.selectable_value(&mut self.settings.target, None, "清除目标");
-                        if self.windows.is_empty() {
-                            ui.weak("打开应用窗口后，刷新此列表。");
-                        }
-                        let mut previous = None;
-                        for window in &self.windows {
-                            if previous != Some(window.path.as_str()) {
-                                let app = WindowTarget {
-                                    title: None,
-                                    path: window.path.clone(),
-                                };
-                                ui.selectable_value(
-                                    &mut self.settings.target,
-                                    Some(app),
-                                    executable_name(&window.path),
-                                );
-                                previous = Some(window.path.as_str());
-                            }
-                            let target = WindowTarget {
-                                title: Some(window.title.clone()),
+        if design::picker_with_refresh(ui, |ui, picker_width| {
+            let label = self
+                .settings
+                .target
+                .as_ref()
+                .map_or_else(|| "选择目标应用".into(), target_label);
+            egui::ComboBox::from_id_salt("target-app")
+                .width(picker_width)
+                .truncate()
+                .selected_text(&label)
+                .show_ui(ui, |ui| {
+                    ui.set_max_width(picker_width);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    ui.selectable_value(&mut self.settings.target, None, "清除目标");
+                    if self.windows.is_empty() {
+                        ui.weak("打开应用窗口后，刷新此列表。");
+                    }
+                    let mut previous = None;
+                    for window in &self.windows {
+                        if previous != Some(window.path.as_str()) {
+                            let app = WindowTarget {
+                                title: None,
                                 path: window.path.clone(),
                             };
-                            ui.indent((&window.path, &window.title), |ui| {
-                                ui.selectable_value(
-                                    &mut self.settings.target,
-                                    Some(target),
-                                    &window.title,
-                                )
-                                .on_hover_text(&window.title);
-                            });
+                            ui.selectable_value(
+                                &mut self.settings.target,
+                                Some(app),
+                                executable_name(&window.path),
+                            );
+                            previous = Some(window.path.as_str());
                         }
-                    })
-                    .response
-                    .on_hover_text(label);
-                if ui.button("刷新").clicked() {
-                    self.windows = platform::windows();
-                }
-            });
-            ui.weak("同一应用有多个窗口时，可以选择具体窗口。");
-        });
+                        let target = WindowTarget {
+                            title: Some(window.title.clone()),
+                            path: window.path.clone(),
+                        };
+                        ui.indent((&window.path, &window.title), |ui| {
+                            ui.selectable_value(
+                                &mut self.settings.target,
+                                Some(target),
+                                &window.title,
+                            )
+                            .on_hover_text(&window.title);
+                        });
+                    }
+                })
+                .response
+                .on_hover_text(label);
+        }) {
+            self.windows = platform::windows();
+        }
     }
 
     fn preview(&mut self, ctx: &Context, snapshot: &Snapshot) {
@@ -621,10 +723,25 @@ impl Fishing {
             .as_ref()
             .filter(|image| image.at.elapsed() < STALE_FRAME)
         {
-            if self.texture.is_none() || self.texture_sequence != image.sequence {
+            let brightness = self.settings.preview_brightness;
+            if self.texture.is_none()
+                || self.texture_sequence != image.sequence
+                || self.texture_brightness != brightness
+            {
                 let frame = &image.frame;
-                let pixels =
+                let mut pixels =
                     ColorImage::from_rgb([frame.width as usize, frame.height as usize], &frame.rgb);
+                if brightness != DEFAULT_PREVIEW_BRIGHTNESS {
+                    let adjust =
+                        |channel: u8| ((u16::from(channel) * brightness + 50) / 100).min(255) as u8;
+                    for pixel in &mut pixels.pixels {
+                        *pixel = egui::Color32::from_rgb(
+                            adjust(pixel.r()),
+                            adjust(pixel.g()),
+                            adjust(pixel.b()),
+                        );
+                    }
+                }
                 if let Some(texture) = &mut self.texture {
                     texture.set(pixels, egui::TextureOptions::LINEAR);
                 } else {
@@ -635,15 +752,18 @@ impl Fishing {
                     ));
                 }
                 self.texture_sequence = image.sequence;
+                self.texture_brightness = brightness;
             }
         } else {
             self.texture = None;
         }
 
+        let frameless = self.settings.preview_frameless;
         let mut builder = egui::ViewportBuilder::default()
             .with_title("fishing 预览")
             .with_icon(brand::window_icon())
-            .with_inner_size([320.0, 192.0])
+            .with_decorations(!frameless)
+            .with_inner_size([320.0, 180.0])
             .with_min_inner_size([175.0, 120.0])
             .with_active(false)
             .with_taskbar(false)
@@ -660,12 +780,13 @@ impl Fishing {
             egui::ViewportId::from_hash_of("camera-preview"),
             builder,
             |ctx, class| {
-                let closed = ctx.input(|input| input.viewport().close_requested());
+                let mut closed = ctx.input(|input| input.viewport().close_requested());
                 let rect = ctx.input(|input| input.viewport().outer_rect);
                 if class != egui::ViewportClass::Embedded {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::new().fill(design::PREVIEW_SURFACE))
                         .show(ctx, |ui| {
+                            let area = ui.available_rect_before_wrap();
                             ui.centered_and_justified(|ui| {
                                 if let Some(texture) = &self.texture {
                                     let area = ui.available_size();
@@ -683,6 +804,9 @@ impl Fishing {
                                     );
                                 }
                             });
+                            if frameless {
+                                closed |= preview_window_controls(ui, area);
+                            }
                         });
                 }
                 (closed, rect)
@@ -694,12 +818,138 @@ impl Fishing {
         if closed {
             self.preview_open = false;
             self.settings.preview = false;
+            ctx.request_repaint();
         }
     }
 }
 
+fn preview_window_controls(ui: &mut Ui, area: egui::Rect) -> bool {
+    let mouse_pressed =
+        ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+    let surface = ui.interact(
+        area,
+        ui.id().with("preview-surface"),
+        egui::Sense::click_and_drag(),
+    );
+    let resize_area =
+        egui::Rect::from_min_max(area.right_bottom() - Vec2::splat(16.0), area.right_bottom());
+    let resize = ui.interact(
+        resize_area,
+        ui.id().with("preview-resize"),
+        egui::Sense::drag(),
+    );
+    if resize.hovered() || resize.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        ui.painter()
+            .rect_filled(resize_area, 0.0, design::PREVIEW_SURFACE);
+        for inset in [5.0, 9.0, 13.0] {
+            let corner = resize_area.right_bottom() - Vec2::splat(3.0);
+            ui.painter().line_segment(
+                [
+                    corner - egui::vec2(inset, 0.0),
+                    corner - egui::vec2(0.0, inset),
+                ],
+                egui::Stroke::new(1.0, design::PREVIEW_TEXT),
+            );
+        }
+    }
+    if mouse_pressed {
+        if resize.is_pointer_button_down_on() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::BeginResize(
+                    egui::ResizeDirection::SouthEast,
+                ));
+        } else if surface.is_pointer_button_down_on() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+    }
+    let mut closed = false;
+    surface.context_menu(|ui| {
+        if ui.button("关闭预览").clicked() {
+            closed = true;
+            ui.close();
+        }
+    });
+    closed
+}
+
 impl Fishing {
-    fn draw_settings(&mut self, ctx: &Context, snapshot: &Snapshot) {
+    fn application_settings(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            let label = ui.label("关闭窗口");
+            egui::ComboBox::from_id_salt("close-behavior")
+                .selected_text(self.settings.close_behavior.label())
+                .width(138.0)
+                .show_ui(ui, |ui| {
+                    for behavior in [
+                        CloseBehavior::Exit,
+                        CloseBehavior::ToTray,
+                        CloseBehavior::Ask,
+                    ] {
+                        ui.selectable_value(
+                            &mut self.settings.close_behavior,
+                            behavior,
+                            behavior.label(),
+                        );
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+        });
+        ui.separator();
+        let directory = self.storage.as_ref().map(Storage::updates_directory);
+        self.updater.show(ui, directory.as_deref());
+    }
+
+    fn draw_home(&mut self, ui: &mut Ui) {
+        design::surface(ui, |ui| {
+            if ui.available_width() >= 610.0 {
+                ui.columns(2, |columns| {
+                    design::section_title(&mut columns[0], "监看与触发");
+                    self.rule_section(&mut columns[0]);
+                    design::section_title(&mut columns[1], "触发动作");
+                    self.action_section(&mut columns[1]);
+                });
+            } else {
+                design::section_title(ui, "监看与触发");
+                self.rule_section(ui);
+                ui.add_space(12.0);
+                design::section_title(ui, "触发动作");
+                self.action_section(ui);
+            }
+        });
+    }
+
+    fn draw_preferences(&mut self, ui: &mut Ui) {
+        if ui.available_width() >= 680.0 {
+            ui.columns(2, |columns| {
+                design::section(&mut columns[0], "人员录入", |ui| {
+                    self.people_section(ui)
+                });
+                columns[0].add_space(10.0);
+                design::section(&mut columns[0], "应用", |ui| {
+                    self.application_settings(ui)
+                });
+                design::section(&mut columns[1], "摄像头与预览", |ui| {
+                    self.camera_section(ui)
+                });
+                columns[1].add_space(10.0);
+                design::section(&mut columns[1], "提示文字", |ui| {
+                    self.notification_section(ui)
+                });
+            });
+        } else {
+            design::section(ui, "人员录入", |ui| self.people_section(ui));
+            ui.add_space(10.0);
+            design::section(ui, "摄像头与预览", |ui| self.camera_section(ui));
+            ui.add_space(10.0);
+            design::section(ui, "提示文字", |ui| self.notification_section(ui));
+            ui.add_space(10.0);
+            design::section(ui, "应用", |ui| self.application_settings(ui));
+        }
+    }
+
+    fn draw_main_window(&mut self, ctx: &Context, snapshot: &Snapshot) {
         egui::TopBottomPanel::top("app-header")
             .frame(
                 egui::Frame::side_top_panel(&ctx.style())
@@ -708,11 +958,8 @@ impl Fishing {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.image((self.logo.id(), Vec2::splat(42.0)));
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(brand::NAME).font(design::bold_font(25.0)));
-                        ui.label(RichText::new("桌面摸鱼助手").small().weak());
-                    });
+                    ui.image((self.logo.id(), Vec2::splat(38.0)));
+                    ui.label(RichText::new(brand::NAME).font(design::bold_font(25.0)));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let running = self.running_since.is_some();
                         let label = if running { "暂停" } else { "启动" };
@@ -741,6 +988,14 @@ impl Fishing {
                             .clicked()
                         {
                             self.minimize_to_tray(ctx);
+                        }
+                        let page = if self.show_preferences {
+                            "返回首页"
+                        } else {
+                            "设置"
+                        };
+                        if ui.button(page).clicked() {
+                            self.show_preferences = !self.show_preferences;
                         }
                     });
                 });
@@ -812,33 +1067,51 @@ impl Fishing {
                     .inner_margin(egui::Margin::symmetric(22, 18)),
             )
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    design::section(ui, "摄像头", |ui| self.camera_section(ui));
-                    ui.add_space(9.0);
-                    design::section(ui, "触发条件", |ui| self.rule_section(ui));
-                    ui.add_space(9.0);
-                    design::section(ui, "触发动作", |ui| self.action_section(ui));
-                });
+                let preferences = self.show_preferences;
+                egui::ScrollArea::vertical()
+                    .id_salt(("main-page", preferences))
+                    .show(ui, |ui| {
+                        if preferences {
+                            self.draw_preferences(ui);
+                        } else {
+                            self.draw_home(ui);
+                        }
+                    });
             });
     }
 }
 
 impl eframe::App for Fishing {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        if !self.handle_tray_actions(ctx) {
-            return;
-        }
+        let was_in_tray = self.in_tray;
         let initial = self.settings.clone();
         let snapshot = self
             .engine
             .as_ref()
             .map_or_else(Snapshot::default, Engine::snapshot);
-        self.observe(&snapshot);
-        if !self.in_tray {
-            self.draw_settings(ctx, &snapshot);
+        self.handle_tray_actions(ctx);
+        self.handle_close_request(ctx);
+        if !self.allow_exit {
+            if self.updater.poll() {
+                self.request_exit(ctx);
+            } else {
+                self.observe(&snapshot);
+            }
         }
+        // eframe presents the last update before applying close/minimize. Keep
+        // the settings surface composed through that transition.
+        if !self.in_tray || !was_in_tray {
+            self.draw_main_window(ctx, &snapshot);
+        }
+        let close_confirmed = self.draw_close_prompt(ctx);
         self.preview(ctx, &snapshot);
-        self.configure_engine();
+        if !self.allow_exit {
+            self.configure_engine();
+        }
 
         if initial != self.settings
             && self.save_enabled
@@ -849,8 +1122,17 @@ impl eframe::App for Fishing {
                 .err()
                 .map(|error| format!("设置保存失败 · {error}"));
         }
+        if close_confirmed {
+            if initial.close_behavior != self.settings.close_behavior && self.save_error.is_some() {
+                self.settings.close_behavior = initial.close_behavior;
+            } else {
+                self.request_exit(ctx);
+            }
+        }
         if (!self.in_tray && self.job.is_some()) || self.enrollment.is_some() {
             ctx.request_repaint_after(Duration::from_millis(40));
+        } else if self.updater.pending() {
+            ctx.request_repaint_after(Duration::from_millis(120));
         }
     }
 }

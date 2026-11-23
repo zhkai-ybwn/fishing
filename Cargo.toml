@@ -1,6 +1,6 @@
 [package]
 name = "fishing"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.90"
 description = "Local Windows camera preview and configurable presence alerts"
@@ -12,13 +12,14 @@ name = "fishing"
 path = "src/main.rs"
 
 [workspace]
-members = ["crates/platform", "crates/vision"]
+members = ["crates/platform", "crates/update", "crates/vision"]
 resolver = "3"
 
 [dependencies]
 boss-sensor-platform = { path = "crates/platform" }
 boss-sensor-vision = { path = "crates/vision" }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow"] }
+fishing-update = { path = "crates/update" }
 raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

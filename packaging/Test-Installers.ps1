@@ -12,7 +12,9 @@ Set-StrictMode -Version Latest
 
 $installPath = Join-Path $env:LOCALAPPDATA 'Programs/BossSensor'
 $app = Join-Path $installPath 'fishing.exe'
-if (Test-Path -LiteralPath $installPath) {
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory', 'DoNotVerify')) 'fishing.lnk'
+$startShortcut = Join-Path ([Environment]::GetFolderPath('Programs', 'DoNotVerify')) 'fishing.lnk'
+if ((Test-Path -LiteralPath @($installPath, $desktopShortcut, $startShortcut)) -contains $true) {
     throw 'Use a clean test user. The fishing installation directory already exists.'
 }
 
@@ -32,13 +34,19 @@ function Invoke-Installer([string]$Program, [string]$Arguments, [string]$LogSwit
     }
 }
 
-function Test-InstalledApplication {
+function Test-InstalledApplication([bool]$ExpectDesktopShortcut) {
     foreach ($name in @('fishing.exe', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll',
                        'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll',
                        'Rust-Dependency-Licenses.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $installPath $name) -PathType Leaf)) {
             throw "Missing installed file: $name"
         }
+    }
+    if (!(Test-Path -LiteralPath $startShortcut -PathType Leaf)) {
+        throw 'The Start menu shortcut is missing.'
+    }
+    if ((Test-Path -LiteralPath $desktopShortcut -PathType Leaf) -ne $ExpectDesktopShortcut) {
+        throw 'The desktop shortcut did not match the selected install option.'
     }
 
     # Load the runtime from the installed application directory.
@@ -60,18 +68,26 @@ function Test-InstalledApplication {
 }
 
 function Assert-Uninstalled {
-    if (Test-Path -LiteralPath $installPath) { throw 'The installation directory remains after uninstall.' }
+    if ((Test-Path -LiteralPath @($installPath, $desktopShortcut, $startShortcut)) -contains $true) {
+        throw 'An installation directory or shortcut remains after uninstall.'
+    }
 }
 
 Invoke-Installer $msiexec "/i `"$msi`" /qn /norestart" '/l*v' 'msi-install'
-try { Test-InstalledApplication } finally {
+try { Test-InstalledApplication $true } finally {
     Invoke-Installer $msiexec "/x `"$msi`" /qn /norestart" '/l*v' 'msi-uninstall'
 }
 Assert-Uninstalled
 
 Invoke-Installer $exe '-install -quiet -norestart' '-log' 'exe-install'
-try { Test-InstalledApplication } finally {
+try { Test-InstalledApplication $true } finally {
     Invoke-Installer $exe '-uninstall -quiet -norestart' '-log' 'exe-uninstall'
 }
 Assert-Uninstalled
-Write-Host 'Both installers installed, ran the application self-test, and uninstalled.'
+
+Invoke-Installer $exe '-install -quiet -norestart DesktopShortcut=0' '-log' 'exe-opt-out-install'
+try { Test-InstalledApplication $false } finally {
+    Invoke-Installer $exe '-uninstall -quiet -norestart' '-log' 'exe-opt-out-uninstall'
+}
+Assert-Uninstalled
+Write-Host 'Both installers passed app and shortcut checks, including desktop shortcut opt-out.'

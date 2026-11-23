@@ -82,6 +82,8 @@ jobs:
           $wix = (Resolve-Path -LiteralPath ./target/wix-tools/wix.exe).Path
           & $wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $wix extension add -g WixToolset.UI.wixext/6.0.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./packaging/Build-Installers.ps1 -Version $env:FISHING_VERSION -Wix $wix -OutputDirectory ./target/distribution
 
       - name: Smoke-test both installers

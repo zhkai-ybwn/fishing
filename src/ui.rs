@@ -1,7 +1,7 @@
 use eframe::egui::{
-    Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Frame, Margin, Rect,
-    Response, RichText, Sense, Stroke, StrokeKind, TextStyle, Theme, Ui, WidgetInfo, WidgetType,
-    vec2,
+    Align2, Button, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Frame, Margin,
+    Rect, Response, RichText, Sense, Stroke, StrokeKind, TextStyle, Theme, Ui, WidgetInfo,
+    WidgetType, vec2,
 };
 
 struct Palette {
@@ -124,7 +124,15 @@ pub fn configure_theme(ctx: &Context) {
 }
 
 pub fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
+    section_title(ui, title);
+    surface(ui, content);
+}
+
+pub fn section_title(ui: &mut Ui, title: &str) {
     ui.label(RichText::new(title).font(bold_font(16.0)));
+}
+
+pub fn surface(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
     Frame::new()
         .fill(ui.visuals().window_fill)
         .stroke(ui.visuals().window_stroke)
@@ -134,6 +142,24 @@ pub fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
             ui.set_min_width(ui.available_width());
             content(ui);
         });
+}
+
+pub fn picker_with_refresh(ui: &mut Ui, picker: impl FnOnce(&mut Ui, f32)) -> bool {
+    const REFRESH_WIDTH: f32 = 60.0;
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - REFRESH_WIDTH - ui.spacing().item_spacing.x).max(0.0);
+        ui.scope(|ui| {
+            // ComboBox::width is a minimum. Truncation uses the surrounding UI's width.
+            ui.set_width(width);
+            picker(ui, width);
+        });
+        ui.add_sized(
+            [REFRESH_WIDTH, ui.spacing().interact_size.y],
+            Button::new("刷新"),
+        )
+        .clicked()
+    })
+    .inner
 }
 
 pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
@@ -192,4 +218,31 @@ pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
     let knob_radius = if pressed { 6.0 } else { 6.5 };
     painter.circle_filled(track.center() + vec2(offset, 0.0), knob_radius, knob);
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{CentralPanel, ComboBox, RawInput};
+
+    #[test]
+    fn picker_with_a_long_title_keeps_the_refresh_button_inside_its_row() {
+        let ctx = Context::default();
+        configure_theme(&ctx);
+        let title = "Code · light-theme.less - ami-workspace - ".repeat(20);
+        let _ = ctx.run(RawInput::default(), |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                ui.set_width(320.0);
+                let right = ui.max_rect().right();
+                picker_with_refresh(ui, |ui, width| {
+                    ComboBox::from_id_salt("long-title")
+                        .width(width)
+                        .truncate()
+                        .selected_text(&title)
+                        .show_ui(ui, |_| {});
+                });
+                assert!(ui.min_rect().right() <= right + 0.5);
+            });
+        });
+    }
 }

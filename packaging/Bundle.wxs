@@ -7,11 +7,16 @@
           AboutUrl="https://github.com/zhkai-ybwn/fishing"
           IconSourceFile="$(IconPath)"
           Compressed="yes" DisableModify="yes">
+    <Variable Name="DesktopShortcut" Type="numeric" Value="1" Persisted="yes" bal:Overridable="yes" />
     <BootstrapperApplication>
-      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="" />
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl=""
+                                              LogoFile="$(LogoPath)" ThemeFile="$(ThemePath)"
+                                              LocalizationFile="$(LocalizationPath)" SuppressOptionsUI="yes" />
     </BootstrapperApplication>
     <Chain>
-      <MsiPackage SourceFile="$(MsiPath)" />
+      <MsiPackage SourceFile="$(MsiPath)">
+        <MsiProperty Name="FISHINGDESKTOPSHORTCUT" Value="[DesktopShortcut]" />
+      </MsiPackage>
     </Chain>
   </Bundle>
 </Wix>
